@@ -1,0 +1,28 @@
+# This makefile is executed as a preliminary to executing the main makefile.
+# It's most important job is to update Makefile_deps, which describes all the dependencies.
+
+include Makefile_rules
+
+# The MakeDepend program examines dependencies, and regenerates Makefile_deps, if necessary.
+all: updateTimestamp bin/MakeDepend testRunners
+	bin/MakeDepend
+
+# How to make a couple of special binaries, instructions for which can't appear
+# in the Makefile_deps file because they're necessary to produce that file.
+bin/MakeDepend: src/system/MakeDepend.cc
+	mkdir -p bin
+	g++ -std=c++11 $(DEPEND_FLAGS) -ggdb -O3 -Isrc/ -o $@ src/system/MakeDepend.cc
+	rm -f dependencies.db
+
+# This object is always rebuilt so we'll have up-to-date date+time info.
+.PHONY: updateTimestamp
+updateTimestamp:
+	mkdir -p $(BIN)
+	mkdir -p $(OBJ)
+	$(CC) $(CFLAGS) -DUNAME_RELEASE=`uname -r` -DSVN_VERSION=$(SVN_VERSION) -c -o $(OBJ)/LinkTimestamp.o src/LinkTimestamp.cc
+
+test/%.cc: test/%.h
+	@perl test/cxxtest/bin/cxxtestgen.pl -o $@ --error-printer $<
+
+.PHONY: testRunners
+testRunners: $(patsubst %.h, %.cc, $(wildcard test/*.h))

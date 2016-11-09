@@ -1,0 +1,37 @@
+#                                                                                                                                           
+# Copyright (c) 2015 10X Genomics, Inc. All rights reserved.
+#
+@include "_sort_fastq_by_barcode_stages.mro"
+
+pipeline _SORT_FASTQ_BY_BARCODE(
+    in  map[]      chunk,
+    in  string     barcode_whitelist            "name of barcode whitelist file",
+    in  float      max_expected_barcode_errors,
+    in  float      bc_confidence_threshold,
+    in  json       barcode_counts,
+    out fastq.gz[] reads,
+    out int[]      gem_group,
+    out bool[]     valid_bc,
+    out string[]   prefix,
+)
+{
+    call volatile BUCKET_FASTQ_BY_BC(
+        barcode_counts              = self.barcode_counts,
+        bc_confidence_threshold     = self.bc_confidence_threshold,
+        chunk                       = self.chunk,
+        max_expected_barcode_errors = self.max_expected_barcode_errors,
+        barcode_whitelist           = self.barcode_whitelist,
+        buckets                     = 128,
+    )
+
+    call volatile SORT_FASTQ_BY_BC(
+        bc_buckets = BUCKET_FASTQ_BY_BC.file_map,
+    )
+
+    return (
+        reads     = SORT_FASTQ_BY_BC.reads,
+        gem_group = SORT_FASTQ_BY_BC.gem_group,
+        valid_bc  = SORT_FASTQ_BY_BC.valid_bc,
+        prefix    = SORT_FASTQ_BY_BC.prefix,
+    )
+}

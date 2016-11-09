@@ -1,0 +1,107 @@
+#
+# Copyright (c) 2014 10X Genomics, Inc. All rights reserved.
+#
+# input_mode specifies how FASTQs were generated. There are two modes:
+#
+# 1. "BCL_PROCESSOR"
+#
+# FASTQs produced by the 10X BCL_PROCESSOR pipeline. This mode assumes
+# the FASTQ files obey the internal naming conventions and the reads
+# have been interleaved into RA FASTQ files.
+#
+# 2. "ILMN_BCL2FASTQ"
+#
+# FASTQs produced directly by Illumina BCL2FASTQ v1.8.4. For this mode,
+# BCL2FASTQ must be configured to emit the the index2 read, rather than
+# using it for dual-index demultiplexing:
+#
+# configureBclToFastq.pl --no-eamss --use-bases-mask=Y100,I8,Y14,Y100 \
+#     --input-dir=<basecalls_dir> --output-dir=<output_dir> \
+#     --sample-sheet=<sample_sheet.csv>
+#
+# The sample sheet must be formatted as per the BCL2FASTQ documentation
+# (10 column csv), and must contain a row for each sample index used.
+# The sequencer must have been run in dual index mode, with the second
+# index read (used to read the 10X barcode) emitted as the R2 output file.
+# The --use-bases-mask argument should be set to the read length used.
+#
+@include "_aligner_stages.mro"
+@include "_bcsorter.mro"
+
+pipeline _ALIGNER(
+    in  string  sample_id,
+    in  string  fastq_mode            "configuration of the input fastqs",
+    in  map[]   sample_def,
+    in  bool    exclude_non_bc_reads,
+    in  string  reference_path        "this is the reference_path",
+    in  string  barcode_whitelist     "name of barcode whitelist file",
+    in  bed     targets               "targets file",
+    in  int     trim_length,
+    in  string  read_group_sample     "sample header for BAM file",
+    in  map     downsample,
+    out bam     bcsorted_bam          "bam file sorted by barcode",
+    out bam     possorted_bam         "bam file sorted by posiiton",
+    out bam.bai possorted_bam_index   "position-sorted bam index",
+    out json    duplicate_summary     "duplicate count histogram",
+    out json    lot_info              "gelbead lot detected",
+    out json    downsample_info       "info on downsampling",
+)
+{
+    call local volatile SETUP_CHUNKS(
+        sample_id         = self.sample_id,
+        input_mode        = self.fastq_mode,
+        sample_def        = self.sample_def,
+        barcode_whitelist = self.barcode_whitelist,
+        downsample        = self.downsample,
+    )
+
+    call volatile TRIM_READS(
+        chunks            = SETUP_CHUNKS.chunks,
+        max_read_num      = 10000000,
+        read1_trim_length = self.trim_length,
+        read2_trim_length = 0,
+        barcode_whitelist = self.barcode_whitelist,
+    )
+
+    call volatile ALIGN(
+        chunks            = TRIM_READS.chunks,
+        aligner           = "bwa",
+        aligner_method    = "MEM",
+        reference_path    = self.reference_path,
+        read_group_sample = self.read_group_sample,
+        num_threads       = 4,
+    )
+
+    call volatile ATTACH_BCS(
+        align                   = ALIGN,
+        chunks                  = TRIM_READS.chunks,
+        paired_end              = true,
+        barcode_whitelist       = self.barcode_whitelist,
+        exclude_non_bc_reads    = self.exclude_non_bc_reads,
+        bc_confidence_threshold = 0.975,
+        bc_counts               = TRIM_READS.bc_counts,
+    )
+
+    call volatile SORT_BY_POS(
+        input = ATTACH_BCS.output,
+    )
+
+    call volatile MARK_DUPLICATES(
+        targets_file       = self.targets,
+        perfect_read_count = ATTACH_BCS.perfect_read_count,
+        input              = SORT_BY_POS,
+    )
+
+    call _BCSORTER(
+        input = MARK_DUPLICATES.output,
+    )
+
+    return (
+        bcsorted_bam        = _BCSORTER.bcsorted_bam,
+        possorted_bam       = MARK_DUPLICATES.output,
+        possorted_bam_index = MARK_DUPLICATES.index,
+        duplicate_summary   = MARK_DUPLICATES.duplicate_summary,
+        lot_info            = TRIM_READS.lot_info,
+        downsample_info     = SETUP_CHUNKS.downsample_info,
+    )
+}

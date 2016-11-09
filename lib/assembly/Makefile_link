@@ -1,0 +1,7 @@
+.PHONY: all
+all:
+include Makefile_rules
+include Makefile_scripts
+COMPILE :=
+ARCHIVE :=
+include Makefile_deps

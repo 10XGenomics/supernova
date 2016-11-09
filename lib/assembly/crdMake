@@ -1,0 +1,21 @@
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    *=*)
+              ARGS="$ARGS $1"
+              shift
+              ;;
+    -*)
+              ARGS="$ARGS $1"
+              shift
+              ;;
+    *)
+              break
+              ;;
+  esac
+done
+
+make -fMakefile_init $ARGS
+make -fMakefile_compile $ARGS "$@"
+make -fMakefile_library $ARGS
+make -fMakefile_link $ARGS "$@"

@@ -1,0 +1,10 @@
+.PHONY: lib
+lib:
+
+include Makefile_rules
+COMPILE :=
+LINK :=
+include Makefile_deps
+
+$(LIBNAM): $(wildcard $(LIBOBJECTS))
+lib: $(LIBNAM)

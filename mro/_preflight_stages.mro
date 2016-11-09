@@ -1,0 +1,10 @@
+#
+# Copyright (c) 2015 10X Genomics, Inc. All rights reserved.
+#
+stage ASSEMBLER_PREFLIGHT(
+    in string input_mode,
+    in map[]  sample_def,
+    in string barcode_whitelist,
+    in map    downsample,
+    src py     "stages/preflight/denovo",
+)

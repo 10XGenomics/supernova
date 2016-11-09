@@ -1,0 +1,63 @@
+@include "_assembler_stages.mro"
+@include "_sort_fastq_by_barcode.mro"
+@include "_aligner_stages.mro"
+filetype fastb;# binary sequence file
+filetype qualp;# packed quality scores
+filetype bci;
+# barcode index
+
+pipeline _ASSEMBLER_PREP(
+    in  string sample_id,
+    in  string fastq_mode                   "configuration of the input fastqs",
+    in  map[]  sample_def,
+    in  string barcode_whitelist            "name of barcode whitelist file",
+    in  int    trim_length,
+    in  float  max_expected_barcode_errors,
+    in  map    downsample,
+    out fastb  reads,
+    out qualp  quals,
+    out bci    bci,
+)
+{
+    call local volatile SETUP_CHUNKS(
+        input_mode        = self.fastq_mode,
+        sample_def        = self.sample_def,
+        barcode_whitelist = self.barcode_whitelist,
+        downsample        = self.downsample,
+        sample_id         = self.sample_id,
+    )
+
+    call volatile TRIM_READS(
+        chunks            = SETUP_CHUNKS.chunks,
+        max_read_num      = 1000000,
+        barcode_whitelist = self.barcode_whitelist,
+        read1_trim_length = self.trim_length,
+        read2_trim_length = 0,
+    )
+
+    call COUNT_BCS(
+        chunks            = TRIM_READS.chunks,
+        barcode_whitelist = self.barcode_whitelist,
+    )
+
+    call _SORT_FASTQ_BY_BARCODE(
+        chunk                       = TRIM_READS.chunks,
+        barcode_whitelist           = self.barcode_whitelist,
+        max_expected_barcode_errors = self.max_expected_barcode_errors,
+        bc_confidence_threshold     = 0.975,
+        barcode_counts              = TRIM_READS.bc_counts,
+    )
+
+    call volatile FASTQ_TO_FASTBQUALP(
+        in_reads  = _SORT_FASTQ_BY_BARCODE.reads,
+        valid_bc  = _SORT_FASTQ_BY_BARCODE.valid_bc,
+        prefix    = _SORT_FASTQ_BY_BARCODE.prefix,
+        gem_group = _SORT_FASTQ_BY_BARCODE.gem_group,
+    )
+
+    return (
+        reads = FASTQ_TO_FASTBQUALP.out_reads,
+        quals = FASTQ_TO_FASTBQUALP.out_quals,
+        bci   = FASTQ_TO_FASTBQUALP.out_bci,
+    )
+}

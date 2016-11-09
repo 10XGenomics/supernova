@@ -1,0 +1,54 @@
+#
+# Copyright (c) 2015 10X Genomics, Inc. All rights reserved.
+#
+filetype fastb;
+filetype qualp;
+filetype bci;
+filetype fastq.gz;
+filetype json;
+filetype script;
+filetype txt;
+filetype csv;
+
+stage FASTQ_TO_FASTBQUALP(
+    in  fastq.gz[] in_reads,
+    in  bool[]     valid_bc,
+    in  string[]   prefix,
+    in  int[]      gem_group,
+    out fastb      out_reads,
+    out qualp      out_quals,
+    out bci        out_bci,
+    src py         "stages/denovo/assembly_prep",
+) split using (
+    in  fastq.gz   in_reads_file,
+)
+
+stage ASSEMBLER_DF(
+    in  string sample_id,
+    in  string sample_desc,
+    in  fastb  reads,
+    in  qualp  quals,
+    in  bci    bci,
+    in  map    downsample,
+    in  map    addin,
+    in  string pipeline_id,
+    in  string known_sample_id,
+    in  bool nodebugmem,
+    out path,
+    src py     "stages/denovo/df",
+) split using (
+)
+
+stage ASSEMBLER_CP(
+    in  string sample_id,
+    in  string sample_desc,
+    in  path   parent_dir,
+    in  string known_sample_id,
+    in  map    addin,
+    in  bool nodebugmem,
+    out path,
+    out csv    summary_cs,
+    out txt    report,
+    src py     "stages/denovo/cp",
+) split using (
+)

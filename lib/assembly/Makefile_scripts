@@ -1,0 +1,38 @@
+###############################################################################
+#                    SOFTWARE COPYRIGHT NOTICE AGREEMENT                      #
+#        This software and its documentation are copyright (2010) by the      #
+#    Broad Institute.  All rights are reserved.  This software is supplied    #
+#    without any warranty or guaranteed support whatsoever. The Broad         #
+#    Institute is not responsible for its use, misuse, or functionality.      #
+###############################################################################
+
+##############################################################################
+## Add scripts to this line that should be part of the build
+##############################################################################
+
+# a list of perl scripts to install
+SCRIPTS	= \
+ crdMake \
+ parse_deps.py
+
+
+##############################################################################
+## SCRIPTS
+##############################################################################
+
+# bin dir for scripts
+SCRIPT_BIN	:= bin
+
+ifndef $(SCRIPT_TARGETS)
+SCRIPT_TARGETS 	:= $(addprefix $(SCRIPT_BIN)/,$(notdir $(SCRIPTS)))
+LOCAL_VPATH 	:= $(VPATH) $(strip $(dir $(SCRIPTS)))
+VPATH 		:= $(shell echo $(LOCAL_VPATH)|sed -e 's+ +:+g')
+endif
+
+install_scripts: $(SCRIPT_BIN) $(SCRIPT_TARGETS)
+
+$(SCRIPT_BIN)/%: %
+	cp $< $@ && chmod 775 $@
+
+$(SCRIPT_BIN): 
+	@ mkdir -p $(SCRIPT_BIN)

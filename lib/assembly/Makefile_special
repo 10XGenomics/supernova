@@ -1,0 +1,41 @@
+.PHONY: clean
+clean: cleanExes cleanObjects cleanLibs
+	rm -f dependencies.db Makefile_deps
+
+.PHONY:
+cleanLibs:
+	rm -rf $(LIBNAM)
+
+.PHONY: cleanObjects
+cleanObjects:
+	rm -rf $(OBJ)/*
+
+.PHONY: cleanExes
+cleanExes:
+	rm -rf $(BIN)/*
+
+.PHONY: cleanAll
+cleanAll:
+	rm -rf bin/* obj/* bin_*/* obj_*/* dependencies.db Makefile_deps
+
+.PHONY: oss-ready
+oss-ready: install_scripts
+	bin/MakeDepend
+	bin/parse_deps.py --clean_src . ./Makefile_deps
+	$(MAKE) clean
+	rm -rf src/ncbi
+
+auxfiles/auxfiles: auxfiles/*.jar auxfiles/*.js
+	@ mkdir -p $(BIN)/auxfiles
+	cp $? $(BIN)/auxfiles
+	@ touch auxfiles/auxfiles
+
+#$(JEMALLOC_LIB)/libjemalloc.a:
+#	$(MAKE) -C ../.. jemalloc
+
+#.PHONY: jemalloc
+#jemalloc: $(JEMALLOC_LIB)/libjemalloc.a
+
+.PHONY: jemalloc
+jemalloc:
+	$(MAKE) -C ../.. jemalloc

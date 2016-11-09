@@ -1,0 +1,36 @@
+#
+# Copyright (c) 2015 10X Genomics, Inc. All rights reserved.
+#
+filetype fastq.gz;
+filetype json;
+
+stage BUCKET_FASTQ_BY_BC(
+    in  map[]    chunk,
+    in  int      buckets,
+    in  string   barcode_whitelist,
+    in  float    max_expected_barcode_errors,
+    in  float    bc_confidence_threshold,
+    in  json     barcode_counts,
+    out json     file_map,
+    out int      gem_group,
+    out fastq.gz,
+    src py       "stages/reads/bucket_fastq_by_bc",
+) split using (
+    in  fastq.gz read_file,
+    in  fastq.gz barcode_file,
+    in  fastq.gz sample_index_file,
+    in  int      gem_group,
+)
+
+stage SORT_FASTQ_BY_BC(
+    in  json       bc_buckets,
+    out fastq.gz[] reads,
+    out int[]      gem_group,
+    out string[]   prefix,
+    out bool[]     valid_bc,
+    src py         "stages/reads/sort_fastq_by_bc",
+) split using (
+    in  string     prefix,
+    in  string     gem_code,
+    in  map[]      bucket,
+)

@@ -1,0 +1,105 @@
+# Locations for the build.
+BIN := bin
+OBJ := obj
+
+# target-specific values for CFLAGS
+OMP_FLAGS := -fopenmp
+CXXTEST := -Itest
+
+# target-specific values for LDLIBS
+GMPXX := -lgmpxx -lgmp
+JEMALLOC_VERSION ?= 3.6.0
+JEMALLOC_PATH ?= $(shell pwd)/../jemalloc/$(JEMALLOC_VERSION)
+JEMALLOC_CFLAGS := -I$(JEMALLOC_PATH)/include -DJEMALLOC_HOOKS
+JEMALLOC_LIB := $(JEMALLOC_PATH)/lib
+JEMALLOC := -L$(JEMALLOC_LIB) -Wl,-rpath,$(JEMALLOC_LIB) -ljemalloc
+OMP := -lgomp
+PTHREAD := -lpthread
+X11 := -lX11
+ZLIB := -lz
+
+# Pieces of how to build things.
+CC := g++
+CFLAGS := -std=c++11 -Wextra -Wall -Wsign-promo -Woverloaded-virtual -Wendif-labels -Isrc/ $(JEMALLOC_CFLAGS)
+
+SVN_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || svnversion 2>/dev/null || echo "unknown")
+
+# STRICT=yes removes all exceptions from the warnings.
+ifneq ($(STRICT),yes)
+    CFLAGS := $(CFLAGS) -Wno-unused -Wno-deprecated -Wno-long-long -Wno-parentheses -Wno-unused-parameter
+endif
+
+CFLAGS := $(CFLAGS) -fno-nonansi-builtins -mieee-fp -fno-strict-aliasing -iquote . -ggdb
+
+LD := g++
+LDFLAGS := -ggdb
+LDLIBS :=
+AR := ar
+
+# STATIC=yes builds static binaries, primarily for cross platform testing
+ifeq ($(STATIC),yes)
+    LDFLAGS += -static
+    PTHREAD := -Wl,--whole-archive -lpthread -Wl,--no-whole-archive
+endif
+
+# SHOWMEM=yes for some memory debug lines (NW)
+ifeq ($(SHOWMEM),yes)
+	CFLAGS += -DSHOWMEM
+endif
+
+# CS=yes for the product release
+ifeq ($(CS),yes)
+	CFLAGS += -DCS
+endif
+
+
+
+# GENERIC=yes disables processor-specific options that might cause silently
+# broken binaries and data corruption on non-CRD x86-64 machines.
+ifneq ($(GENERIC),yes)
+    CFLAGS := $(CFLAGS) -march=opteron-sse3
+else
+    OBJ := $(OBJ)_generic
+    BIN := $(BIN)_generic
+endif
+
+# If the debugging flag is on, append _debug to the build locations and adjust CFLAGS appropriately.
+ifeq ($(DEBUGGING),yes)
+  OBJ :=$(OBJ)_debug
+  BIN :=$(BIN)_debug
+  CFLAGS := $(CFLAGS)
+else
+  CFLAGS := $(CFLAGS) -O3
+
+# Chaos can easily result down this road, but this feature lets you turn on debug mode
+# for whatever you happen to recompile, without segregating the resulting objects in a
+# separate directory.  Do this enough without keeping track of what you've done, and
+# you'll end up with a mess of programs that are halfway in debug mode, which will run
+# slowly and you won't know why.
+ifneq ($(FORCE_DEBUG),yes)
+  CFLAGS := $(CFLAGS) -DNDEBUG
+endif
+
+endif
+
+# If the profiling flag is on, append _prof to the build locations.
+ifeq ($(PROFILE),yes)
+  OBJ :=$(OBJ)_prof
+  BIN :=$(BIN)_prof
+  LDFLAGS := $(LDFLAGS) -pg
+  CFLAGS := $(CFLAGS) -pg
+endif
+
+# This is the command that we'll use for all linking.
+# Note: certain binaries will use target-specific overrides to adjust LDFLAGS and LDLIBS
+# as directed by "MakeDepend: lflags" and "library" directives embedded in their sources.
+LINK = $(LD) $(LDFLAGS) -o $@ $< $(OBJ)/LinkTimestamp.o -L$(OBJ) -l10X $(LDLIBS) $(ZLIB)
+
+# This is the command that we'll use for all compilation.
+# Note:  Certain objects will use target-specific overrides to adjust CFLAGS as directed
+# by "MakeDepend: cflags" directives embedded in their sources.
+COMPILE = mkdir -p $(@D) && $(CC) $(CFLAGS) -c -o $@ $<
+
+# This is the command that we'll use to update the library
+ARCHIVE = $(AR) cr $@ $?
+
