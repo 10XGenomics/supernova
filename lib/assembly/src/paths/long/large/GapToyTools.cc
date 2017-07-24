@@ -31,7 +31,6 @@
 #include "paths/long/Heuristics.h"
 #include "paths/long/LoadCorrectCore.h"
 #include "paths/long/Logging.h"
-#include "paths/long/LongHyper.h"
 #include "paths/long/LongProtoTools.h"
 #include "paths/long/MakeKmerStuff.h"
 #include "paths/long/ReadPath.h"
@@ -1124,52 +1123,6 @@ void GetRoots( const HyperBasevector& hb, vec<int>& to_left, vec<int>& to_right,
                if ( len > max_prox2 ) lroot = -1;    }    }
      */
      }
-
-void MakeLocalAssembly2( VecEFasta& corrected, const HyperBasevector& hb,
-     const vec<int>& lefts, const vec<int>& rights, ostringstream& mout,
-     SupportedHyperBasevector& shb, const Bool INJECT, const int K2_FLOOR,
-     vecbasevector& creads, LongProtoTmpDirManager& tmp_mgr, vec<int>& cid,
-     vec<pairing_info>& cpartner )
-{
-     double clock = WallClockTime( );
-     long_logging logc( "", "" );
-     logc.STATUS_LOGGING = False;
-     logc.MIN_LOGGING = False;
-     ref_data ref;
-     vec<ref_loc> readlocs;
-     long_logging_control log_control( ref, &readlocs, "", "" );
-     long_heuristics heur( "" );
-     heur.K2_FLOOR = K2_FLOOR;
-     int count = 0;
-     for ( int l = 0; l < (int) corrected.size( ); l++ )
-          if ( corrected[l].size( ) > 0 ) count++;
-     if ( count == 0 ) mout << "No reads were corrected." << endl;
-     else
-     {    vecbasevector injections;
-          if (INJECT)
-          {    for ( int i = 0; i < lefts.isize( ); i++ )
-                    injections.push_back( hb.EdgeObject( lefts[i] ) );
-               for ( int i = 0; i < rights.isize( ); i++ )
-                    injections.push_back( hb.EdgeObject( rights[i] ) );    }
-          if ( injections.size( ) > 0 )
-          {    heur.INJECT_REF = True;
-               log_control.G = &injections;    }
-          if ( !LongHyper( "", corrected, cpartner, shb, heur,
-               log_control, logc, tmp_mgr, False ) )
-          {    mout << "No paths were found." << endl;
-               SupportedHyperBasevector shb0;
-               shb = shb0;    }
-          else
-          {    // heur.LC_CAREFUL = True;
-               shb.DeleteLowCoverage( heur, log_control, logc );
-               if ( shb.NPaths( ) == 0 )
-               {    mout << "No paths were found." << endl;
-                    SupportedHyperBasevector shb0;
-                    shb = shb0;    }
-               else shb.TestValid(logc);    }    }
-     mout << "using K2 = " << shb.K( ) << "\n";
-     mout << "local assembly has " << shb.EdgeObjectCount( ) << " edges" << "\n";
-     mout << "assembly time 2 = " << TimeSince(clock) << endl;    }
 
 void MakeLocalAssembly1( const int lroot, const int rroot,
      const HyperBasevector& hb, const vecbasevector& bases,

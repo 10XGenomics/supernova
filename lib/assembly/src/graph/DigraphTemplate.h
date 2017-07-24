@@ -31,8 +31,21 @@
 #include "FeudalMimic.h"
 #include "Set.h"
 #include "VecUtilities.h"
+#include "ParallelVecUtilities.h"
 #include "graph/Digraph.h"
 #include <cstddef>
+
+template<class E> void digraphE<E>::CyclicCoreEdges( vec<int>& x ) const
+{    x.clear( );
+     vec<Bool> cored( N( ), False );
+     vec<int> core;
+     CyclicCore(core);
+     for ( auto e : core ) cored[e] = True;
+     for ( int v = 0; v < N( ); v++ )
+     {    if ( cored[v] )
+          {    for ( int j = 0; j < From(v).isize( ); j++ )
+                    if ( cored[ From(v)[j] ] ) x.push_back( IFrom(v,j) );    }    }
+     Sort(x);    }
 
 template<class E> vec<int> digraphE<E>:: EdgesBoundedBy( const int e1, const int e2,
      const vec<int>& to_left, const vec<int>& to_right ) const
@@ -268,6 +281,86 @@ template<class F> digraphE<F>::digraphE( const ConstructorName cname,
      {    SortSync( from[v], from_edge_obj[v] );
           SortSync( to[v], to_edge_obj[v] );    }
      Initialize( from, to, edges, to_edge_obj, from_edge_obj );    }
+
+
+
+template<class F> digraphE<F>::digraphE( const digraphE& g, 
+        const vec<vec<int>>& orbits )
+{    
+     // Construct ee from orbits - 
+     equiv_rel ee;
+     ee.Initialize(g.E( ));
+     /* #pragma omp parallel for */
+     for(int k = 0; k < orbits.isize( ); k++)
+         for(auto o: orbits[k])
+            ee.Join(orbits[k].back(),o);
+
+     ForceAssertEq( ee.Size( ), g.E( ) );
+     vec<int> to_left, to_right, ereps;
+     g.ToLeft(to_left), g.ToRight(to_right);
+     ee.OrbitRepsAlt(ereps);
+     equiv_rel ev( g.N( ) );
+     vec<F> edges( ereps.size( ) );
+
+     #pragma omp parallel for
+     for ( int r = 0; r < ereps.isize( ); r++ )
+     {    vec<int> o;
+          ee.Orbit( ereps[r], o );
+          for ( int j1 = 0; j1 < o.isize( ) - 1; j1++ )
+          {    int j2 = j1 + 1;
+               // !!!! This check is removed for the sake of speed
+               // ForceAssert( g.O( o[j1] ) == g.O( o[j2] ) );
+               #pragma omp critical
+              { ev.Join( to_left[ o[j1] ], to_left[ o[j2] ] );
+               ev.Join( to_right[ o[j1] ], to_right[ o[j2] ] );}    }
+          edges[r] = g.O( o[0] );    }
+     vec<int> vreps;
+     ev.OrbitRepsAlt(vreps);
+     int N = vreps.size( );
+     vec<vec<int>> from(N), to(N), from_edge_obj(N), to_edge_obj(N);
+
+     #pragma omp parallel for
+     for ( int v = 0; v < N; v++ )
+     {    vec<int> o;
+          ev.Orbit( vreps[v], o );
+          vec< pair<int,int> > we;
+          for ( int j = 0; j < o.isize( ); j++ )
+          {    int vp = o[j];
+               for ( int k = 0; k < g.From(vp).isize( ); k++ )
+               {    int wp = g.From(vp)[k], ep = g.IFrom( vp, k );
+                    int w = BinPosition( vreps, ev.ClassId(wp) );
+                    int e = BinPosition( ereps, ee.ClassId(ep) );
+                    we.push( w, e );    }    }    
+          UniqueSort(we);
+          for ( int j = 0; j < we.isize( ); j++ )
+          {    int w = we[j].first, e = we[j].second;
+               from[v].push_back(w); 
+               from_edge_obj[v].push_back(e);    }     }
+
+     #pragma omp parallel for
+     for ( int v = 0; v < N; v++ )
+     {    vec<int> o;
+          ev.Orbit( vreps[v], o );
+          vec< pair<int,int> > we;
+          for ( int j = 0; j < o.isize( ); j++ )
+          {    int vp = o[j];
+               for ( int k = 0; k < g.To(vp).isize( ); k++ )
+               {    int wp = g.To(vp)[k], ep = g.ITo( vp, k );
+                    int w = BinPosition( vreps, ev.ClassId(wp) );
+                    int e = BinPosition( ereps, ee.ClassId(ep) );
+                    we.push( w, e );    }    }    
+          UniqueSort(we);
+          for ( int j = 0; j < we.isize( ); j++ )
+          {    int w = we[j].first, e = we[j].second;
+               to[v].push_back(w); 
+               to_edge_obj[v].push_back(e);    }     }
+
+     #pragma omp parallel for
+     for ( int v = 0; v < N; v++ )
+     {    SortSync( from[v], from_edge_obj[v] );
+          SortSync( to[v], to_edge_obj[v] );    }
+     Initialize( from, to, edges, to_edge_obj, from_edge_obj );    
+     CanonicalizeVertices();   }
 
 template<class E> digraphE<E>::digraphE( const ConstructorName cname,
      const digraphE& g, const vec< vec<int> >& C )
@@ -562,6 +655,74 @@ template<class E> void digraphE<E>::ReorderVertices( const vec<int>& new_order )
                to_[v][j] = order_new[ to_[v][j] ];
           SortSync( from_[v], from_edge_obj_[v] );
           SortSync( to_[v], to_edge_obj_[v] );    }    }
+
+template<class E> void digraphE<E>::ParallelReorderVertices( const vec<int>& new_order )
+{
+    vec<vec<int>> from(N()),to(N()),to_edge_obj(N()),from_edge_obj(N());
+    #pragma omp parallel for
+    for(int v = 0; v < N(); v++){
+        from[new_order[v]] = from_[v];
+        to[new_order[v]] = to_[v];
+        from_edge_obj[new_order[v]] = from_edge_obj_[v];
+        to_edge_obj[new_order[v]] = to_edge_obj_[v];
+        for(int k = 0; k< from[new_order[v]].isize(); k++)
+            from[new_order[v]][k] = new_order[from[new_order[v]][k]];
+        for(int k = 0; k< to[new_order[v]].isize(); k++)
+            to[new_order[v]][k] = new_order[to[new_order[v]][k]];
+    }
+    #pragma omp parallel for
+    for ( int v = 0; v < N(); v++ )
+    {    SortSync( from[v], from_edge_obj[v] );
+         SortSync( to[v], to_edge_obj[v] );    }
+    to_ = to;
+    from_ = from;
+    to_edge_obj_ = to_edge_obj;
+    from_edge_obj_ = from_edge_obj;
+}
+
+template<class E> void digraphE<E>::CanonicalizeVertices( )
+{
+    // canonicalize by renaming vertices 
+    vec<int> to_left, to_right;
+    ToLeft(to_left); ToRight(to_right);
+    vec<int> perm_v(N(),-1);
+    int sofar = 0;
+    for(int e = 0; e < E(); e++)
+        if(perm_v[to_left[e]]<0)
+            perm_v[to_left[e]] = sofar++;
+    for(int e = 0; e < E(); e++)
+        if(perm_v[to_right[e]]<0)
+            perm_v[to_right[e]] = sofar++;
+    ParallelReorderVertices(perm_v);
+}
+
+template<class F> void digraphE<F>::ReorderEdges( vec<int64_t>& permutation )
+{
+    // modify edges
+    vec<F> new_edges(edges_.size());
+    #pragma omp parallel for
+    for(int64_t i = 0; i < edges_.size(); i++){
+        new_edges[permutation[i]] = edges_[i];
+    }
+    edges_ = new_edges;
+    Destroy(new_edges);
+
+    // modify fromEdgeObj, toEdgeObj
+    #pragma omp parallel for
+    for(int64_t v = 0; v < N( ); v++){
+        for(int i = 0; i < to_edge_obj_[v].isize(); i++)
+            to_edge_obj_[v][i] = permutation[to_edge_obj_[v][i]];
+        for(int i = 0; i < from_edge_obj_[v].isize(); i++)
+            from_edge_obj_[v][i] = permutation[from_edge_obj_[v][i]];
+    }
+
+    //Sort sync
+    #pragma omp parallel for
+    for(int64_t v = 0; v < N(); v++){
+        SortSync(from_[v],from_edge_obj_[v]);
+        SortSync(to_[v],to_edge_obj_[v]);
+    }
+}
 
 template<class E> void digraphE<E>::ReorderComponents( const vec<int>& new_order )
 {    equiv_rel e( N( ) );
@@ -1829,6 +1990,353 @@ template<class E> void DistancesToEndArr( const digraphE<E>& G,
      for ( int v = 0; v < G.N( ); v++ )
           if ( D[v] < 0 ) D[v] = max_dist;    }
 
+
+// Helper function for MaxDistanceToEndArr
+// Does a (recursive) depth-first search to catalog back edges and vertices,
+// stored as a pair in back_ev
+
+template<class F>
+void DFS( const digraphE<F> & G, const vec<int> & edgeLens,
+     const int start, set<int> & vvisited, set<pair<int,int>> & part,
+     const int dist_explored, const int & max_dist,
+     const int depth, const int max_depth, const Bool fw )
+{
+     if ( dist_explored > max_dist ) return;
+     if ( depth > max_depth ) return;
+     const vec<int> & children = ( fw ? G.To(start) : G.From(start) );
+     for ( int i = 0; i != children.isize(); i++ ) {
+          const int vert = children[i];
+          const int edge = ( fw ? G.ITo(start, i) : G.IFrom(start, i) );
+          if ( vvisited.count(vert) ) {
+               const pair<int,int> p( edge, vert );
+               part.insert( p );
+          } else {
+               set<int> vvisited2 = vvisited;
+               vvisited2.insert(vert);
+               const int elen = Max(edgeLens[edge],1);
+               DFS( G, edgeLens, vert, vvisited2, part,
+                    dist_explored+elen, max_dist, depth+1, max_depth, fw );
+          }
+     }
+}
+
+// Do a Depth-First-Search to identify back edges and back vertices
+// starting from all the vertices in ends. The search is bounded by both
+// max_dist AND max_depth (there could be zero length edges in loops)
+template <class F>
+void MarkBackEdgesAndVertices( const digraphE<F> & G, const vec<int> & edgeLens,
+     const vec<int> & ends, vec<int> & back_edges, vec<int> & back_verts,
+     const int & max_dist, const int max_depth, const Bool fw,
+     const Bool verbose = False )
+{
+     set<pair<int,int>> back_ev, part;
+     set<int> vvisited;
+     #pragma omp parallel for schedule (dynamic,1) \
+          firstprivate(vvisited, part)
+     for ( int ei = 0; ei < ends.isize(); ei++ ) {
+          const int vend = ends[ei];
+          vvisited.clear();
+          part.clear();
+          vvisited.insert(vend);
+          DFS( G, edgeLens, vend, vvisited, part, 
+               0, max_dist, 0, max_depth, fw );
+          if ( part.empty() ) continue;
+          for ( auto & p : part ) {
+               #pragma omp critical
+               back_ev.insert(p);
+          }
+     }
+     back_verts.reserve(back_ev.size());
+     back_edges.reserve(back_ev.size());
+     for ( auto & p : back_ev ) {
+          back_edges.push_back(p.first);
+          back_verts.push_back(p.second);
+     }
+}
+
+// Compute the max distance of path to a source/sink ( based on fw )
+// This function handles loops, and makes sure that a loop is traversed only once
+
+template<class E> void MaxDistanceToEndArr( const digraphE<E>& G,
+     const vec<int> & edgeLens, const int max_dist, const Bool fw, vec<int>& dist,
+     const int max_depth = 20, const Bool verbose = False )
+{
+     // Let dist(v) be the maximum length of a path starting at v, to be computed.
+     // Define initial values for dist(v) to be 'undefined', except for sinks, 
+     // which are zero.
+     dist.resize_and_set( G.N( ), -1 );
+     for ( int v = 0; v < G.N( ); v++ )
+     {    if ( fw && G.Sink(v) ) dist[v] = 0;
+          if ( !fw && G.Source(v) ) dist[v] = 0;    }
+
+     // Initialize vertices to process.
+
+     vec<int> ends;
+     for ( int v = 0; v < G.N( ); v++ )
+     {    if ( (fw && G.Sink(v)) || (!fw && G.Source(v)) ) 
+          {    ends.push_back(v);    }    }
+     Sort(ends);
+
+     // Do a depth-first search from each end to find "back edges" that form loops
+     
+     if ( verbose )
+          cout << Date( ) << ": start DFS from " << ends.size() << " ends" << endl;
+     vec<int> back_verts;
+     vec<int> back_edges;
+     MarkBackEdgesAndVertices( G, edgeLens, ends, back_edges, back_verts,
+          max_dist, max_depth, fw, verbose );
+
+     if ( verbose )
+          cout << Date( ) << ": starting main distance computation loop" << endl;
+     // Main loop to compute distances
+     vec<int> process = ends;
+     vec<Bool> back_edge_used ( back_edges.size(), False );
+     while ( process.nonempty() ) {
+          const int v = process.back();
+          process.pop_back();
+          const int imax = ( fw ? G.To(v).size() : G.From(v).size() );
+          for ( int i = 0; i != imax; i++ ) {
+               const int w = ( fw ? G.To(v)[i] : G.From(v)[i] );
+               if ( dist[w] > max_dist ) continue;
+               const int edge = ( fw ? G.ITo(v, i) : G.IFrom(v, i) );
+               const int epos = BinPosition( back_edges, edge );
+               if ( epos >= 0 ) {
+                    if ( back_edge_used[epos] )
+                         continue;
+                    back_edge_used[epos] = True;
+               }
+               const int dw = dist[v] + edgeLens[edge];
+               if ( dw > dist[w] ) {
+                    dist[w] = dw;
+                    // if we updated based on a back edge then don't reprocess
+                    if ( epos < 0 )
+                         process.push_back(w);
+                    // if this vertex is a back vertex, then we allow for
+                    // another traversal of the back edge that leads to it
+                    const int wpos = BinPosition( back_verts, w );
+                    if ( wpos >= 0  && epos < 0 )
+                         back_edge_used[wpos] = False;
+               }
+          }
+     }
+     
+     if ( verbose ) 
+          cout << Date( ) << ": marking uninitialized vertices" << endl;
+     // If anything is uninitialized, mark it's distance as infinity
+     
+     process.clear();
+     process.reserve( G.N() );
+     for ( int v = 0; v < G.N(); v++ ) {
+          if ( dist[v] < 0 )
+               dist[v] = max_dist;
+          if ( dist[v] >= max_dist )
+               process.push_back( v );
+     }
+
+     if ( verbose )
+          cout << Date( ) << ": updating distances" << endl;
+     // Update distances after marking infinite distance nodes
+     while ( process.nonempty() ) {
+          const int v = process.back();
+          process.pop_back();
+          const auto & connect = (fw ? G.To(v) : G.From(v));
+          for ( auto & w : connect ) {
+               if ( dist[w] < max_dist ) {
+                    dist[w] = max_dist;
+                    process.push_back(w);
+               }
+          }
+     }
+
+     // Update vertices that are part of cycles that may have
+     // unusually low distances
+     // This is just a heuristic, update with something sensible!
+     const int UPDATE_PASSES = 2;
+     for ( int pass = 1; pass <= UPDATE_PASSES; pass++ ) {
+          for ( int v = 0; v < G.N(); v++ ) {
+               const auto & verts = (fw ? G.To(v) : G.From(v));
+               for ( int i = 0; i < verts.isize(); i++ ) {
+                    const int e = ( fw ? G.ITo(v,i) : G.IFrom(v,i) ), w = verts[i];
+                    const int x = dist[v] + edgeLens[e];
+                    if ( dist[w] < max_dist && dist[w] < x )
+                         dist[w] = x;
+               }
+          }
+     }
+}
+
+// Compute the max distance of path to a source/sink ( based on fw )
+// This function handles loops, and makes sure that a loop is traversed only once
+// This is a version of the MaxDistanceToEndArr code that attempts to 
+// compute the distances in parallel. The results are potentially different because
+// the loops can be traversed differently. Just use the version above.
+
+template<class E> void MaxDistanceToEndArrOld( const digraphE<E>& G,
+     const vec<int> & edgeLens, const int max_dist, const Bool fw, vec<int>& dist )
+{
+     // Let dist(v) be the maximum length of a path starting at v, to be computed.
+     // Define initial values for dist(v) to be 'undefined', except for sinks, 
+     // which are zero.
+
+     dist.resize_and_set( G.N( ), -1 );
+     for ( int v = 0; v < G.N( ); v++ )
+     {    if ( fw && G.Sink(v) ) dist[v] = 0;
+          if ( !fw && G.Source(v) ) dist[v] = 0;    }
+
+     // Initialize vertices to process.
+
+     vec<int> ends;
+     for ( int v = 0; v < G.N( ); v++ )
+     {    if ( (fw && G.Sink(v)) || (!fw && G.Source(v)) ) 
+          {    ends.push_back(v);    }    }
+     Sort(ends);
+     
+     // index into ends
+     map<int,int> endsi;
+     for ( int i = 0; i < ends.isize(); i++ )
+          endsi[ends[i]]=i;
+
+     // Track which source/sink a vertex is connected to
+     vec<vec<int>> to_end( G.N() );
+
+     #pragma omp parallel for schedule (dynamic,1)
+     for ( int ei = 0; ei < ends.size(); ei++ ) {
+          const int vend = ends[ei];
+          // distance to end tracker for this vertex alone
+          map<int,int> vdist;
+          vdist[vend]=0;
+          to_end[vend] = {vend};
+          // track the boundary of the region to explore
+          vec<int> start = {vend};
+          vec<int> verts;
+          Bool keepgoing=True;
+          while ( keepgoing ) {
+               verts.clear();
+               keepgoing=False;
+               for ( auto & vs : start ) {
+                    const int imax = (fw ? G.To(vs).size() : G.From(vs).size()); 
+                    const int vd = vdist[vs];
+                    for ( int i = 0; i != imax; i++ ) {
+                         const int w    = (fw ? G.To(vs)[i] : G.From(vs)[i]);
+                         if ( vdist.count(w) ) continue;
+                         const int edge = (fw ? G.ITo(vs,i) : G.IFrom(vs,i));
+                         const int wdist  = vd + edgeLens[edge];
+                         vdist[w] = wdist;
+                         if ( wdist <= max_dist ) {
+                              verts.push_back(w);
+                              keepgoing = True;
+                         }
+                    }
+               }
+               start = verts;
+          }
+          for ( auto & vd : vdist ) {
+               if ( vd.first == vend ) continue;
+               #pragma omp critical
+               {    to_end[vd.first].push_back( vend ); }
+          }
+     }
+
+     // Do a depth-first search from each end to find "back edges" that form loops
+     
+     vec<int> back_verts;
+     vec<int> back_edges;
+     MarkBackEdgesAndVertices( G, edgeLens, ends, back_edges, back_verts,
+          max_dist, fw, False );
+   
+     // Construct equivalence classes of ends
+     
+     equiv_rel ve;
+     ve.Initialize( ends.size() );
+     for ( auto & x : to_end ) {
+          if ( x.size() < 2 ) continue;
+          UniqueSort( x );
+          for ( int i = 0; i < x.isize()-1; i++ )
+               ve.Join( endsi[x[i]], endsi[x[i+1]] ); 
+     }
+     
+     vec<int> vreps;
+     ve.OrbitRepsAlt( vreps );
+
+     // Find the zone for each end vertex rep
+
+     vec<vec<int>> vzones( vreps.size() );
+     for ( int v = 0; v < G.N(); v++ ) {
+          if ( to_end[v].empty() ) continue;
+          const int vr = ve.ClassId( endsi[to_end[v][0]] );
+          const int vri = BinPosition( vreps, vr );
+          vzones[vri].push_back( v );
+     }
+
+     // For each equivalence class compute distances
+     #pragma omp parallel for schedule (dynamic,1)
+     for ( int ri = 0; ri < vreps.isize(); ri++ ) {
+          // which vertices will be processed in this loop
+          vec<int> process;
+          {
+               const int vi = vreps[ri];
+               vec<int> o;
+               ve.Orbit( vi, o );
+               for ( auto & x : o )
+                    process.push_back( ends[x] );
+          }
+          // Process vertices except for those in the loop
+          vec<Bool> back_edge_used ( back_edges.size(), False );
+          while ( process.nonempty() ) {
+               const int v = process.back();
+               process.pop_back();
+               const int imax = ( fw ? G.To(v).size() : G.From(v).size() );
+               for ( int i = 0; i != imax; i++ ) {
+                    const int w = ( fw ? G.To(v)[i] : G.From(v)[i] );
+                    if ( dist[w] > max_dist ) continue;
+                    const int edge = ( fw ? G.ITo(v, i) : G.IFrom(v, i) );
+                    const int epos = BinPosition( back_edges, edge );
+                    if ( epos >= 0 ) {
+                         if ( back_edge_used[epos] )
+                              continue;
+                         back_edge_used[epos] = True;
+                    }
+                    const int dw = dist[v] + edgeLens[edge];
+                    if ( dw > dist[w] ) {
+                         dist[w] = dw;
+                         // if we updated based on a back edge then don't reprocess
+                         if ( epos < 0 )
+                              process.push_back(w);
+                         // if this vertex is a back vertex, then we allow for
+                         // another traversal of the back edge that leads to it
+                         const int wpos = BinPosition( back_verts, w );
+                         if ( wpos >= 0  && epos < 0 )
+                              back_edge_used[wpos] = False;
+                    }
+               }
+          }
+     }
+     
+     // If anything is uninitialized, mark it's distance as infinity
+     
+     vec<int> process;
+     process.reserve( G.N() );
+     for ( int v = 0; v < G.N(); v++ ) {
+          if ( dist[v] < 0 )
+               dist[v] = max_dist;
+          if ( dist[v] >= max_dist )
+               process.push_back( v );
+     }
+
+     // Update distances after marking infinite distance nodes
+     while ( process.nonempty() ) {
+          const int v = process.back();
+          process.pop_back();
+          const auto & connect = (fw ? G.To(v) : G.From(v));
+          for ( auto & w : connect ) {
+               if ( dist[w] < max_dist ) {
+                    dist[w] = max_dist;
+                    process.push_back(w);
+               }
+          }
+     }
+}
+
 template<class E> void RemoveHangingEnds( digraphE<E>& G, 
      int (E::*len)( ) const, const int max_del, const double min_ratio )
 {
@@ -2024,6 +2532,12 @@ template<class E> void digraphE<E>::LiberateEdge(
 template<class E> void digraphE<E>::GiveEdgeNewFromVx
 ( int edge_id, int old_from_v, int new_from_v ) {
        int i = Position( from_edge_obj_[old_from_v], edge_id );
+       if ( i == -1 )
+       {
+            #pragma omp critical
+            {   PRINT3( edge_id, old_from_v, new_from_v );
+                cout << "Your old_from_v is not a right vertex of edge_id." 
+                     << endl;    }    }
        ForceAssert( i != -1 );
        int w = from_[old_from_v][i];
        int j = Position( to_edge_obj_[w],edge_id );

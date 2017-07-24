@@ -15,9 +15,118 @@
 #include "10X/paths/ReadPathVecX.h"
 #include "10X/DfTools.h"
 #include "10X/Gap.h"
+#include "10X/mergers/NicePrints.h"
 
 size_t StatLogger::externalSizeof() { return 0; }
 StatLogger StatLogger::gInst;
+
+
+void InitializePathsXFromPaths( ReadPathVecX & pathsX, const HyperBasevectorX & hb,
+     const String paths_file, const size_t BATCH, const Bool verbose )
+{
+     double clock = WallClockTime();
+     double iotime = 0;
+     
+     pathsX.clear();
+
+     if ( verbose ) cout << Date( ) << ": multi-threaded in pieces" << endl;
+     size_t N = 0;
+     { 
+          VirtualMasterVec<ReadPath> vpaths ( paths_file );
+          N = vpaths.size();
+     }
+     {
+          int batches = N/BATCH+1;
+          ReadPathVec piece;
+          const int nthreads = omp_get_max_threads();
+          ReadPathVecX xpiece;
+          int batch = 0;
+          size_t lenSum = 0;
+          for ( size_t id = 0; id < N; id+=BATCH ) {
+               batch++;
+               if ( verbose )
+                    cout << Date( ) << ": reading from disk (" << batch << " of " 
+                         << batches << ")" << endl;
+               const size_t stop = Min( id + BATCH, N );
+               piece.clear();
+               double ioclock = WallClockTime();
+               piece.ReadRange( paths_file, id, stop );
+               iotime += (WallClockTime() - ioclock);
+               if ( verbose )
+                    cout << Date( ) <<": parallel append" << endl;
+               const int npaths = piece.size()/nthreads + 1;
+               #pragma omp parallel for ordered num_threads(nthreads) \
+                    firstprivate( xpiece )
+               for ( int t = 0; t < nthreads; t++ ) {
+                    xpiece.clear();
+                    const int64_t start = t*npaths;
+                    const int64_t num_reads = Min( (size_t)(t+1)*npaths, piece.size() )-start;
+                    xpiece.append( piece, hb, start, num_reads );
+                    #pragma omp ordered
+                    {    pathsX.append( xpiece ); }
+               }
+               lenSum = std::accumulate( piece.begin(), piece.end(), lenSum, [](size_t b, ReadPath const& a){ return b+a.size(); } );
+          }
+
+          cout << "Total readpath length = " << lenSum << ", average=" << static_cast<long double>(lenSum)/N << ", count=" << N << endl;
+     }
+     int ioper = iotime/(WallClockTime()-clock ) * 100;
+     cout << Date( ) << ": finished reading pathsX, used " << TimeSince(clock)
+          << "; " << ioper << " \% I/O" << endl;
+
+     // calculate average path length
+}
+
+// Create a vector of integers, one for each read, such that "having two"
+// nonzero elements is enough.  Note nested parallel for loops, not really
+// what we want.
+
+void Computebid( const vec<DataSet> & datasets, const vec<int64_t> & bci,
+     vec<int64_t> & bid )
+{
+     cout << Date( ) << ": creating bid" << endl;
+     int64_t N = bci.back();
+     bid.resize( N );
+     #pragma omp parallel for schedule( dynamic, 1 )
+     for ( int b = 0; b < bci.isize( ) - 1; b++ )
+     {    int64_t start = bci[b], stop = bci[b+1];
+          #pragma omp parallel for
+          for ( int64_t id = start; id < stop; id++ )
+          {    int di;
+               for ( di = 0; di < datasets.isize( ); di++ )
+                    if ( id < datasets[di].start ) break;
+               const ReadDataType& dtype = datasets[di-1].dt;
+               if ( dtype == ReadDataType::BAR_10X )
+                    bid[id] = N + b + 1;
+               else if ( dtype == ReadDataType::UNBAR_10X ) bid[id] = 0;
+               else if ( dtype == ReadDataType::PCR_FREE ) bid[id] = id + 1;
+
+               // Probably not what we want:
+
+               else if ( dtype == ReadDataType::PCR ) 
+                    bid[id] = id + 1;    }    }
+}
+
+int64_t bidc( const vec<DataSet> & datasets, const vec<int> & bc,
+     const int64_t & id )
+{
+     const int64_t N = bc.size( );
+     // First test for 10X barcoded read
+     if ( bc[id] ) return (N + bc[id]);
+     
+     // this is barcode zero:
+
+     // do we only have 10X data
+     if ( datasets[0].dt == ReadDataType::UNBAR_10X || 
+          datasets[0].dt == ReadDataType::BAR_10X )
+          return N;
+     
+     // if we have PCR free data
+     if ( id < datasets[1].start )
+          return id;
+     else
+          return N;
+}
 
 vec<int> GetBarcodes( const int e, const vec<int>& inv,
      const VecULongVec& paths_index, const vec<int>& bc )
@@ -73,101 +182,146 @@ void LoadData( const String& work_dir, const String& R, const vec<String>& lr,
 {
      String SAMPLE, species;
      String tmp_dir1 = work_dir + "/data";
-     auto& quals = quals_om.object( );
+     auto& quals = quals_om.create();
 
-		// Load ordinary read data.
+     // Load ordinary read data.
 
-		if ( R.size( ) > 0 ) {
-			vec<String> regions;
-			String SELECT_FRAC = "1";
-			ExtractReads( SAMPLE, species, R, SELECT_FRAC, -1,
-				regions, tmp_dir1, work_dir, False, False, False,
-				subsam_names, subsam_starts, &bases, quals_om );
-               // for now, we're assuming R is a single, PCR-free dataset
-               datasets.push_back( { ReadDataType::PCR_FREE, 0 } );
-		}
+     if ( R.size( ) > 0 ) {
+          FatalErr("regular unbarcoded data not accepted");
+          // NW - I broke this when streaming to disk.  I can resurrect, but 
+          // one idea would be the stream bases and quals to disk via bases_out and quals_out and
+          // then continue onward (with nbases set correctly). 
+#if 0
+          vec<String> regions;
+          String SELECT_FRAC = "1";
+          ExtractReads( SAMPLE, species, R, SELECT_FRAC, -1,
+               regions, tmp_dir1, work_dir, False, False, False,
+               subsam_names, subsam_starts, &bases, quals_om );
+          // for now, we're assuming R is a single, PCR-free dataset
+          datasets.push_back( { ReadDataType::PCR_FREE, 0 } );
+#endif
+     }
+    
+     PRINTDEETS("load reads");
+     String const& OUT_HEAD = work_dir + "/data/frag_reads_orig";
+     
+     if ( lr.size() == 1 ) {
+        // if it's only one file, just read it
+        String head = lr[0].Before(".fastb");
+        PRINTDEETS("short pipeline path, reading from " << head);
+        bases.ReadAll(head+".fastb");
+        quals.ReadAll(head+".qualp");
+        BinaryReader::readFile(head+".bci", &bci);
 
-		bci.push_back(0);	// null barcode always at the front
+        datasets.push_back( { ReadDataType::UNBAR_10X, bci[0] } );   // UNBAR is [ bci[0], bci[1] )
+        if ( bci.size() > 2 ) {                                      // BAR is [ bci[1], bci[2] )
+             // something rather wrong if we don't get here...
+             datasets.push_back( { ReadDataType::BAR_10X, bci[1] } );
+        }
+        
+        // and write it
+        PRINTDEETS("writing reads/quals/bci");
+        bases.WriteAll(OUT_HEAD + ".fastb");
+        ForceAssertEq(quals_om.filename(), OUT_HEAD+".qualp");
+        quals_om.store();
+        BinaryWriter::writeFile(OUT_HEAD+".bci", bci);
+     } else {
+         
+         BinaryIteratingWriter<vec<int64_t>>     bci_out( OUT_HEAD+".bci" );
+         IncrementalWriter<basevector>           bases_out( OUT_HEAD+".fastb" );
+         IncrementalWriter<PQVec>                quals_out( OUT_HEAD+".qualp" );
+
+         bci_out.write(0u);	// null barcode always at the front
 
 
-		// load linked-read (LR) data in two passes to avoid duplicating
-		// reads in memory -- first unbarcoded, then barcoded
-          //
-          if ( lr.size() ) ForceAssertEq(lr.size(), LR_SELECT_FRAC.size() );
-		cout << Date() << ": reading in linked read data" << endl;
-		enum passes:int { PASS_UNBARCODED, PASS_BARCODED, PASS_LAST };
-		for ( int pass = PASS_UNBARCODED; pass < PASS_LAST; ++pass ) {
+         // load linked-read (LR) data in two passes to avoid duplicating
+         // reads in memory -- first unbarcoded, then barcoded
+         //
+         if ( lr.size() ) ForceAssertEq(lr.size(), LR_SELECT_FRAC.size() );
+         cout << Date() << ": reading in linked read data" << endl;
+         int64_t nbases=0;
+         enum passes:int { PASS_UNBARCODED, PASS_BARCODED, PASS_LAST };
+         for ( int pass = PASS_UNBARCODED; pass < PASS_LAST; ++pass ) {
 
-			for ( size_t i = 0; i < lr.size(); ++i ) {
+              for ( size_t i = 0; i < lr.size(); ++i ) {
 
-				String head = lr[i].Before(".fastb");
-				VirtualMasterVec<basevector> basesi( head + ".fastb" );
-				VirtualMasterVec<PQVec> qualsi( head + ".qualp" );
+                   String head = lr[i].Before(".fastb");
+                   VirtualMasterVec<basevector> basesi( head + ".fastb" );
+                   VirtualMasterVec<PQVec> qualsi( head + ".qualp" );
 
-				vec<int64_t> bcii;
-				BinaryReader::readFile( head + ".bci" , &bcii );
+                   vec<int64_t> bcii;
+                   BinaryReader::readFile( head + ".bci" , &bcii );
 
-				// sanity check .bci to avoid old code
-				if ( bcii[0] != 0 )
-					FatalErr("barcode 0 is unbarcoded data and must start at 0");
+                   // sanity check .bci to avoid old code
+                   if ( bcii[0] != 0 )
+                        FatalErr("barcode 0 is unbarcoded data and must start at 0");
 
-                    auto frac = LR_SELECT_FRAC[i];
-				auto decider = [frac]() {
-					return (1. * randomx() / RNGen::RNGEN_RAND_MAX) <= frac;
-				};
+                   auto frac = LR_SELECT_FRAC[i];
+                   auto decider = [frac]() {
+                        return (1. * randomx() / RNGen::RNGEN_RAND_MAX) <= frac;
+                   };
 
-				ForceAssertEq( bcii[1] % 2, 0 );
-				ForceAssertLe( bcii[1], basesi.size() );
-				ForceAssertLe( bcii[1], qualsi.size() );
+                   ForceAssertEq( bcii[1] % 2, 0 );
+                   ForceAssertLe( bcii[1], basesi.size() );
+                   ForceAssertLe( bcii[1], qualsi.size() );
 
-				// TODO: these two cases below can now be merged easily
-                    int64_t nbases = bases.size();
-				if ( pass == PASS_UNBARCODED ) {
-                         datasets.push_back( { ReadDataType::UNBAR_10X, nbases } );
+                   // TODO: these two cases below can now be merged easily
+                   if ( pass == PASS_UNBARCODED ) {
+                        datasets.push_back( { ReadDataType::UNBAR_10X, nbases } );
 
-					// append bases, quals from [ 0, bcii[1] )
-					// assume now that we only have pairs
-					for ( size_t i = 0; i < (size_t) bcii[1]; i+=2 ) {
-						if ( decider() ) {
-							bases.push_back(basesi[i]);
-							bases.push_back(basesi[i+1]);
-							quals.push_back(qualsi[i]);
-							quals.push_back(qualsi[i+1]);
-						}
-					}
+                        // append bases, quals from [ 0, bcii[1] )
+                        // assume now that we only have pairs
+                        for ( size_t i = 0; i < (size_t) bcii[1]; i+=2 ) {
+                             if ( decider() ) {
+                                  bases_out.add(basesi[i]);
+                                  bases_out.add(basesi[i+1]);
+                                  quals_out.add(qualsi[i]);
+                                  quals_out.add(qualsi[i+1]);
+                                  nbases += 2;
+                             }
+                        }
 
-				} else if ( pass == PASS_BARCODED ) {
-                         datasets.push_back( { ReadDataType::BAR_10X, nbases } );
+                   } else if ( pass == PASS_BARCODED ) {
+                        datasets.push_back( { ReadDataType::BAR_10X, nbases } );
 
-					for ( size_t bc = 1; bc < bcii.size()-1; ++bc ) {
-						// for each barcode
-						bci.push_back( bases.size() );
-						for ( size_t i = (size_t) bcii[bc]; i < (size_t) bcii[bc+1]; i+=2 ) {
-							// for each pair of this barcode
-							if ( decider() ) {
-								bases.push_back(basesi[i]);
-								bases.push_back(basesi[i+1]);
-								quals.push_back(qualsi[i]);
-								quals.push_back(qualsi[i+1]);
-							}
-						}
-					}
+                        for ( size_t bc = 1; bc < bcii.size()-1; ++bc ) {
+                             // for each barcode
+                             bci_out.write( nbases );
+                             for ( size_t i = (size_t) bcii[bc]; i < (size_t) bcii[bc+1]; i+=2 ) {
+                                  // for each pair of this barcode
+                                  if ( decider() ) {
+                                       bases_out.add(basesi[i]);
+                                       bases_out.add(basesi[i+1]);
+                                       quals_out.add(qualsi[i]);
+                                       quals_out.add(qualsi[i+1]);
+                                       nbases += 2;
+                                  }
+                             }
+                        }
 
-				} else FatalErr("Bug - barcodes pass");
+                   } else FatalErr("Bug - barcodes pass");
 
-			}	// for lr...
+              }	// for lr...
+         } // for pass...
 
-		} // for pass...
+         bci_out.write( nbases );
 
-		bci.push_back( bases.size() );
+         bci_out.close();
+         bases_out.close();
+         quals_out.close();
+         
+         bases.ReadAll( OUT_HEAD + ".fastb" );
+         ForceAssertEq(quals_om.filename(), OUT_HEAD+".qualp");
+         quals_om.unload(); quals_om.load();
+         ForceAssertEq( bases.size( ), quals.size( ) );
+         BinaryReader::readFile( OUT_HEAD + ".bci", &bci );
+     }
 
-		bases.WriteAll( work_dir + "/data/frag_reads_orig.fastb" );
-		quals_om.store();
-		ForceAssertEq( bases.size( ), quals.size( ) );
-		BinaryWriter::writeFile( work_dir + "/data/frag_reads_orig.bci", bci );
 
-          WriteSubSample( bases, quals_om, 500, work_dir + "/data/frag_reads_orig.1000" );
-	}
+
+     PRINTDEETS("done loading reads");
+     WriteSubSample( bases, quals_om, 500, work_dir + "/data/frag_reads_orig.1000" );
+}
 
 void GetQualStats( const VecPQVec& quals, vec<vec<vec<int64_t>>>& hist, 
                    int & max_read_length )
@@ -191,7 +345,7 @@ void GetQualStats( const VecPQVec& quals, vec<vec<vec<int64_t>>>& hist,
      for ( int t = 0; t < T; t++ ) {
           const int64_t start = batch*t;
           const int64_t stop  = Min( batch*(t+1), N );
-          for ( int64_t id = start; id != stop; id++ ) {
+          for ( int64_t id = start; id < stop; id++ ) {
                qualvector q;
                quals[id].unpack( &q );
                int pos = 0;
@@ -241,6 +395,7 @@ void FragDist( const HyperBasevectorX& hb, const vec<int>& inv,
      const ReadPathVec& paths, vec<int64_t>& count )
 {    const int max_sep = 1000;
      count.resize( max_sep + 1, 0 );
+     #pragma omp parallel for
      for ( int64_t id1 = 0; id1 < (int64_t) paths.size( ); id1 += 2 )
      {    int64_t id2 = id1 + 1;
           if ( paths[id1].size() == 0 || paths[id2].size() == 0 ) continue;
@@ -254,12 +409,14 @@ void FragDist( const HyperBasevectorX& hb, const vec<int>& inv,
           int epos2 = hb.Bases(e2) - paths[id2].getOffset( );
           int len = epos2 - epos1;
           if ( len < 0 || len > max_sep ) continue;
-          count[len]++;    }    }
+          #pragma omp critical
+          {    count[len]++;    }    }    }
 
 void FragDist( const HyperBasevectorX& hb, const vec<int>& inv,
      const ReadPathVecX& paths, vec<int64_t>& count )
 {    const int max_sep = 1000;
      count.resize( max_sep + 1, 0 );
+     #pragma omp parallel for
      for ( int64_t id1 = 0; id1 < (int64_t) paths.size( ); id1 += 2 )
      {    int64_t id2 = id1 + 1;
           if ( paths.getNumEdges(id1) == 0 || paths.getNumEdges(id2) == 0 ) continue;
@@ -272,7 +429,8 @@ void FragDist( const HyperBasevectorX& hb, const vec<int>& inv,
           int epos2 = hb.Bases(e2) - paths.getOffset( id2 );
           int len = epos2 - epos1;
           if ( len < 0 || len > max_sep ) continue;
-          count[len]++;    }    }
+          #pragma omp critical
+          {    count[len]++;    }    }    }
 
 void ReadTwoPctProper( const HyperBasevectorX& hb, const vec<int>& inv,
      ReadPathVecX const& paths, double & r2_pct_proper )
@@ -455,7 +613,8 @@ void SanityCheckBarcodeCounts( const vec<int64_t>& bci )
           StatLogger::log( "big_bc_perc", big_bc_perc, "Pct big barcodes");
           StatLogger::issue_alert( "big_bc_perc", big_bc_perc ); }    }
 
-void MakeDots( int& done, int& ndots, const int total )
+template <class T>
+void MakeDots( T& done, T& ndots, const T total )
 {    if ( done % ( (total+99) / 100 ) == 0 )
      {    if ( ndots < 100 )
           {    cout << ".";
@@ -471,6 +630,9 @@ void MakeDots( int& done, int& ndots, const int total )
                else if ( ndots > 0 && ndots % 10 == 0 ) cout << " ";
                flush(cout);    }    }
      done++;    }
+
+template void MakeDots( int& done, int& ndots, const int total );
+template void MakeDots( int64_t& done, int64_t& ndots, const int64_t total );
 
 // Note grossly inefficient conversion below.
 // Note that we might want to factor this through Munch.

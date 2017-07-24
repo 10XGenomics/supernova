@@ -10,12 +10,11 @@
 #include "10X/astats/GenomeAlign.h"
 
 void AlignToGenomeCore( const vecbasevector& tigs, const vecbasevector& genome, 
-     vec< vec< pair<int,int> > >& hits, const int K2 )
+     vec< vec< pair<int,int> > >& hits, const int K2, const int max_gmult )
 {
      // Heuristics.
 
      const int K = 60;
-     const int max_gmult = 4;
 
      // Computational performance heuristics.
 
@@ -126,22 +125,23 @@ void AlignToGenomeCore( const vecbasevector& tigs, const vecbasevector& genome,
 
 void AlignToGenomeX( const HyperBasevectorX& hb, const vec<int>& inv,
      const vecbasevector& genome, vec< vec< pair<int,int> > >& hits,
-     const int K2 )
+     const int K2, const int max_gmult, const Bool adjudicate, const Bool bubble )
 {    double clock = WallClockTime( );
 
      // Heuristics.
 
      const int K = 60;
      const int max_gap = 20000;
-     const int max_gmult = 4;
 
      // Initial alignment.
 
-     AlignToGenomeCore( hb.Edges( ), genome, hits, K2 );
+     AlignToGenomeCore( hb.Edges( ), genome, hits, K2, max_gmult );
 
      // Copy alignments from one bubble branch to another, if the other is naked.
      // Copy alignments into the bubble if it makes sense.
 
+     if (bubble)
+     {
      for ( int v = 0; v < hb.N( ); v++ )
      {    if ( hb.To(v).size( ) != 1 || hb.From(v).size( ) != 2 ) continue;
           if ( hb.From(v)[0] != hb.From(v)[1] ) continue;
@@ -161,9 +161,12 @@ void AlignToGenomeX( const HyperBasevectorX& hb, const vec<int>& inv,
           {    if ( hits[e1].empty( ) ) swap( e1, e2 );
                if ( hits[e1].empty( ) || hits[e2].nonempty( ) ) continue;
                hits[e2] = hits[e1];    }    }
+     }
 
      // Adjudicate some alignments.
 
+     if (adjudicate)
+     {
      for ( int e = 0; e < hb.E( ); e++ )
      {    int re = inv[e];
           if ( hits[e].size( ) + hits[re].size( ) < 2 || e == re ) continue;
@@ -189,17 +192,19 @@ void AlignToGenomeX( const HyperBasevectorX& hb, const vec<int>& inv,
                     else
                     {    hits[re] = { hits[re][ id - hits[e].isize( ) ] };
                          hits[e].clear( );    }    }    }    }
+     }
      
      LogTime( clock, "aligning to genome" );    }
 
 template<int K> void GenomeAlign( const HyperBasevectorX& hb, const vec<int>& inv,
      const vecbasevector& genome, 
-     MasterVec< SerfVec<triple<int,int,int> > >& alignsb )
+     MasterVec< SerfVec<triple<int,int,int> > >& alignsb, const int max_gmult,
+     const Bool adjudicate, const Bool bubble )
 {
      vec< vec< pair<int,int> > > aligns;
      cout << Date( ) << ": aligning to genome, mem = "
           << MemUsageGBString() << endl;
-     AlignToGenomeX( hb, inv, genome, aligns, K );
+     AlignToGenomeX( hb, inv, genome, aligns, K, max_gmult, adjudicate, bubble );
 
      // Create mastervec version, with nearby alignments merged,
      // entries presented as (chr,start,stop).
@@ -220,6 +225,8 @@ template<int K> void GenomeAlign( const HyperBasevectorX& hb, const vec<int>& in
 
 
 template void GenomeAlign<60>( const HyperBasevectorX&, const vec<int>&,
-     const vecbasevector&, MasterVec< SerfVec<triple<int,int,int> > >& );
+     const vecbasevector&, MasterVec< SerfVec<triple<int,int,int> > >&, const int,
+     const Bool, const Bool );
 template void GenomeAlign<80>( const HyperBasevectorX&, const vec<int>&,
-     const vecbasevector&, MasterVec< SerfVec<triple<int,int,int> > >& );
+     const vecbasevector&, MasterVec< SerfVec<triple<int,int,int> > >&, const int,
+     const Bool, const Bool );

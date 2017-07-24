@@ -12,18 +12,13 @@
 #include "paths/long/large/GapToyTools.h"
 
 template <class VQ>
-void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
+void ExtendPathsNew( const HyperBasevectorX& hb, const vec<int>& inv,
      const vecbasevector& bases, const VQ& qualsx, ReadPathVecX& paths,
      const Bool BACK_EXTEND )
 {
      // Ancillary stuff.
 
-     vec<int> to_left, to_right;
-     hb.ToLeft(to_left), hb.ToRight(to_right);
      int K = hb.K( );
-
-     // !!!! NOTE EXPENSIVE CONVERSION !!!!!!!!!!!!!!!!!!!!
-     HyperBasevectorX hbx(hb);
 
      // Extend path backwards if possible.
 
@@ -33,14 +28,14 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
           npaths.reserve(paths.size());
           #pragma omp parallel for ordered schedule(dynamic, 1)
           for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
-          {    ReadPath p;  paths.unzip(p,hbx,id);
+          {    ReadPath p;  paths.unzip(p,hb,id);
                // recompute p
                if(p.size()!=0){
                    int offset = p.getOffset( );
-                   while( offset < 0 && hb.To( to_left[ p[0] ] ).nonempty( ) )
-                   {    int v = to_left[ p[0] ];
+                   while( offset < 0 && hb.To( hb.ToLeft( p[0] ) ).nonempty( ) )
+                   {    int v = hb.ToLeft( p[0] );
                         Bool extended = False;
-                        for ( int j = 0; j < hb.To(v).isize( ); j++ )
+                        for ( int j = 0; j < (int) hb.To(v).size( ); j++ )
                         {    int e = hb.ITo( v, j );
                              Bool mismatch = False;
                              int n = hb.Kmers(e);
@@ -59,7 +54,7 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
                    }
                }
                #pragma omp ordered
-               npaths.append(p,hbx);
+               npaths.append(p,hb);
           }    
           Destroy(paths);
           paths = npaths;
@@ -70,11 +65,11 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
      const int MIN_GAIN = 5;
      const int EXT_MODE = 1;
      cout << Date( ) << ": extending paths" << endl;
-     ReadPathVecX npaths;
-     npaths.reserve(paths.size());
      auto qualsx_clone = qualsx;
-     int64_t batch = omp_get_max_threads()*1000;
-     #pragma omp parallel for ordered firstprivate(qualsx_clone) schedule(dynamic,1)
+     int64_t batch = paths.size()/(omp_get_max_threads()*100)+100;
+     vec<int64_t> starts;
+     vec<ReadPathVecX> blocks;
+     #pragma omp parallel for firstprivate(qualsx_clone) schedule(dynamic,1)
      for ( int64_t start = 0; start < (int64_t) paths.size( ); start+=batch )
      {  
           int64_t stop = Min(start+batch,paths.size());
@@ -82,24 +77,27 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
           ReadPathVecX subRPVX;
           subRPVX.reserve(stop-start);
           for(int64_t i = start; i<stop; i++){
-              paths.unzip(path,hbx,i);
+              paths.unzip(path,hb,i);
               if ( path.size( ) > 0 ) path.resize(1);
-              ExtendPath( path, i, hb, to_right, bases[i], qualsx_clone[i],
+              ExtendPath( path, i, hb, bases[i], qualsx_clone[i],
                   MIN_GAIN, False, EXT_MODE );    
-              subRPVX.append(path,hbx);
+              subRPVX.append(path,hb);
          }
-         #pragma omp ordered
-         npaths.append(subRPVX);
+         #pragma omp critical
+         {   starts.push_back(start);
+             blocks.push_back(subRPVX); }
      }
-     paths = npaths;
+     SortSync(starts,blocks);
+     Destroy(paths);
+     paths.append(blocks);
+     Destroy(blocks);
+     Destroy(starts);
      Validate( hb, paths );
 
      // Extend paths 2.
-     Destroy(npaths);
-     npaths.reserve(paths.size());
      cout << Date( ) << ": starting secondary path extension, mem = " 
           << MemUsageGBString( ) << endl;
-     #pragma omp parallel for ordered schedule(dynamic,1)
+     #pragma omp parallel for schedule(dynamic,1)
      for ( int64_t start = 0; start<(int64_t)paths.size(); start+=batch)
      {    
           int64_t stop = Min(start+batch,paths.size());
@@ -107,7 +105,7 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
           ReadPathVecX subRPVX;
           subRPVX.reserve(stop-start);
           for(int64_t id = start; id<stop; id++){
-              paths.unzip(p,hbx,id);
+              paths.unzip(p,hb,id);
               if ( p.size( ) != 0 ){
                   // Do last K bases of path match perfectly?
                   int pp = 0;
@@ -136,9 +134,9 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
                       {    if ( epos < hb.O(e).isize( ) )
                            {    if ( b[rpos] != hb.O(e)[epos] ) break;    }
                            else
-                           {    int v = to_right[e];
+                           {    int v = hb.ToRight(e);
                                 Bool ext = False;
-                                for ( int j = 0; j < hb.From(v).isize( ); j++ )
+                                for ( int j = 0; j < (int) hb.From(v).size( ); j++ )
                                 {    int f = hb.IFrom( v, j );
                                      if ( b[rpos] == hb.O(f)[K-1] )
                                      {    e = f;
@@ -163,20 +161,25 @@ void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
                       */
                   }
               }
-              subRPVX.append(p,hbx);
+              subRPVX.append(p,hb);
           }
-          #pragma omp ordered
-          npaths.append(subRPVX);
+          #pragma omp critical 
+          {   starts.push_back(start);
+              blocks.push_back(subRPVX); }
      }
-     cout << Date( ) << ": setting paths = npaths, mem = "
+     cout << Date( ) << ": setting paths, mem = "
           << MemUsageGBString( ) << endl;
-     paths = npaths;
+     SortSync(starts,blocks);
+     Destroy(paths);
+     paths.append(blocks);
+     Destroy(blocks);
+     Destroy(starts);
      Validate( hb, paths );    }
 
-template void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
+template void ExtendPathsNew( const HyperBasevectorX& hb, const vec<int>& inv,
      const vecbasevector& bases, const VecPQVec& qualsx, ReadPathVecX& paths,
      const Bool BACK_EXTEND );
 
-template void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
+template void ExtendPathsNew( const HyperBasevectorX& hb, const vec<int>& inv,
      const vecbasevector& bases, const VirtualMasterVec<PQVec>& qualsx, ReadPathVecX& paths,
      const Bool BACK_EXTEND );

@@ -10,14 +10,16 @@
 #include "paths/HyperBasevector.h"
 #include "paths/long/ReadPath.h"
 
+template <class VP, class VPI>
 void Stackaroo( 
 
      // inputs:
 
      VirtualMasterVec<basevector> bases,
      VirtualMasterVec<PQVec> quals, const HyperBasevectorX& hb,
-     const vec<int>& inv, VirtualMasterVec<ReadPath> xpaths,
-     VirtualMasterVec<ULongVec> xpaths_index, 
+     const vec<int>& inv, VP & xpaths,
+     VPI & xpaths_index, 
+     const int MODE,
 
      // inputs and outputs:
 

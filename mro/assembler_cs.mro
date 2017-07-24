@@ -1,5 +1,8 @@
-@include "_assembler_prep.mro"
-@include "_preflight_stages.mro"
+#
+# Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
+#
+
+@include "_assembler.mro"
 
 pipeline ASSEMBLER_CS(
     in  string sample_id,
@@ -13,48 +16,23 @@ pipeline ASSEMBLER_CS(
     out path   assembly     "Raw assembly files",
 )
 {
-    call preflight ASSEMBLER_PREFLIGHT(
-        input_mode        = self.fastq_mode,
-        sample_def        = self.sample_def,
+    call _ASSEMBLER( 
+        pipeline_id = null,
+        sample_id = self.sample_id,
+        fastq_mode = self.fastq_mode,
+        sample_desc = self.sample_desc,
+        sample_def = self.sample_def,
         barcode_whitelist = "4M-with-alts-february-2016",
-        downsample        = self.downsample,
-    )
-
-    call _ASSEMBLER_PREP(
-        sample_id                   = self.sample_id,
-        fastq_mode                  = self.fastq_mode,
-        sample_def                  = self.sample_def,
-        barcode_whitelist           = "4M-with-alts-february-2016",
-        trim_length                 = 7,
-        max_expected_barcode_errors = 1,
-        downsample                  = self.downsample,
-    )
-
-    call ASSEMBLER_DF(
-        sample_id       = self.sample_id,
-        sample_desc     = self.sample_desc,
-        reads           = _ASSEMBLER_PREP.reads,
-        quals           = _ASSEMBLER_PREP.quals,
-        bci             = _ASSEMBLER_PREP.bci,
-        downsample      = self.downsample,
+        trim_length = 7,
+        downsample = self.downsample,
         addin           = null,
-        pipeline_id     = null,
         known_sample_id = null,
-        nodebugmem      = self.nodebugmem,
-    )
-
-    call ASSEMBLER_CP(
-        sample_id       = self.sample_id,
-        sample_desc     = self.sample_desc,
-        parent_dir      = ASSEMBLER_DF,
-        known_sample_id = null,
-        addin           = null,
         nodebugmem      = self.nodebugmem,
     )
 
     return (
-        assembly = ASSEMBLER_CP,
-        summary  = ASSEMBLER_CP.summary_cs,
-        report   = ASSEMBLER_CP.report,
+        assembly = _ASSEMBLER.assembly,
+        summary  = _ASSEMBLER.summary,
+        report   = _ASSEMBLER.report,
     )
 }

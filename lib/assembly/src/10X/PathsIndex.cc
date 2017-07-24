@@ -96,7 +96,7 @@ void writePathsIndex( ReadPathVec & paths, vec<int> & inv,
           unsigned long j = 0;
           // Write read ids ONLY into paths_index part file
           const int emax = Min( (i+1)*chunk_size, num_edges );
-          for ( int e = i*(chunk_size); e != emax; e++ ) {
+          for ( int e = i*(chunk_size); e < emax; e++ ) {
                ULongVec entry;
                if ( empty[e] )
                     piw.add( entry );
@@ -240,7 +240,7 @@ void writePathsIndex( ReadPathVecX & paths, const HyperBasevectorX& hb, vec<int>
           unsigned long j = 0;
           // Write read ids ONLY into paths_index part file
           const int emax = Min( (i+1)*chunk_size, num_edges );
-          for ( int e = i*(chunk_size); e != emax; e++ ) {
+          for ( int e = i*(chunk_size); e < emax; e++ ) {
                ULongVec entry;
                if ( empty[e] )
                     piw.add( entry );

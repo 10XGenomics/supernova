@@ -68,7 +68,7 @@ TRIVIALLY_SERIALIZABLE(covcount);
 template <class DE>
 void FindLines( const DE& dgraph, const vec<int>& dinv,
      vec<vec<vec<vec<int>>>>& lines, const int max_cell_paths, const int max_depth,
-     const Bool verbose = False );
+     const Bool verbose = False, const Bool single = False );
 
 int64_t LineN50( const HyperBasevector& hb,
      const vec<vec<vec<vec<int>>>>& lines, const int min_len );
@@ -109,6 +109,11 @@ void GetLineLengths( LineVec const& lines, vec<int>& llens, EdgeRuler ruler )
   std::transform(lines.begin(),lines.end(),std::back_inserter(llens),
           [ruler]( Line const& line ){ return GetLineLength(line,ruler); }); }
 
+struct DGERuler
+{ DGERuler(digraphE<basevector> const& hbv) : mHBV(hbv) {}
+  int operator()( int edgeId ) { return mHBV.O(edgeId).size( ); }
+  digraphE<basevector> const& mHBV; };
+
 struct HBVKmerRuler
 { HBVKmerRuler(HyperBasevector const& hbv) : mHBV(hbv) {}
   int operator()( int edgeId ) { return mHBV.Kmers(edgeId); }
@@ -145,6 +150,10 @@ struct SupergraphKmerRuler
 inline void GetLineLengths( HyperBasevector const& hb, LineVec const& lines,
                                 vec<int>& llens )
 { GetLineLengths(lines,llens,HBVKmerRuler(hb)); }
+
+inline void GetLineLengths( digraphE<basevector> const& hb, LineVec const& lines,
+                                vec<int>& llens )
+{ GetLineLengths(lines,llens,DGERuler(hb)); }
 
 inline void GetLineLengths( digraphE<vec<int>> const& de, HyperBasevectorX const& hbx,
           LineVec const& lines, vec<int>& llens ) {

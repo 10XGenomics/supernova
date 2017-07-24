@@ -9,12 +9,10 @@ filetype json;
 filetype script;
 filetype txt;
 filetype csv;
+filetype bv;
 
 stage FASTQ_TO_FASTBQUALP(
     in  fastq.gz[] in_reads,
-    in  bool[]     valid_bc,
-    in  string[]   prefix,
-    in  int[]      gem_group,
     out fastb      out_reads,
     out qualp      out_quals,
     out bci        out_bci,
@@ -34,8 +32,31 @@ stage ASSEMBLER_DF(
     in  string pipeline_id,
     in  string known_sample_id,
     in  bool nodebugmem,
+    in  bv     mspedges,
     out path,
     src py     "stages/denovo/df",
+) split using (
+)
+
+stage ASSEMBLER_TR(
+    in  string sample_id,
+    in  string sample_desc,
+    in  path   parent_dir,
+    in  string known_sample_id,
+    in  map    addin,
+    out path,
+    src py     "stages/denovo/tr",
+) split using (
+)
+
+stage ASSEMBLER_MC(
+    in  string sample_id,
+    in  string sample_desc,
+    in  path   parent_dir,
+    in  string known_sample_id,
+    in  map    addin,
+    out path,
+    src py     "stages/denovo/mc",
 ) split using (
 )
 

@@ -94,7 +94,7 @@ public:
                entry->type = LogEntryBase::TYPE::INVALID;
           gInst.mpLines[statName] = entry;
           if ( !gInst.mSilent ) {
-               cout << statName << "=" << val << "\t" << gloss << endl;
+               cout << Date( ) << ": logging " << statName << "=" << val << endl;
           }
      }
      
@@ -105,6 +105,32 @@ public:
           if ( it != gInst.mpLines.end() )
                it->second->to_double( d );
           return d;
+     }
+     
+     // does the stat actually exist
+     static bool statExists( String statName ) {
+          auto it = gInst.mpLines.find( statName );
+          if ( it != gInst.mpLines.end() )
+               return true;
+          return false;
+     }
+
+     // is the stat CS
+     static bool isStatCS( String statName ) {
+          auto it = gInst.mpLines.find( statName );
+          if ( it != gInst.mpLines.end() )
+               return it->second->cs;
+          return false;
+     }
+
+     // retrieve a stored stat as a string
+     static std::string getStringStat( String statName, 
+                                   std::string default_value = "" ) {
+          std::string s = default_value;
+          auto it = gInst.mpLines.find( statName );
+          if ( it != gInst.mpLines.end() )
+               it->second->to_string( s );
+          return s;
      }
 
      // issue martian alerts
@@ -387,6 +413,21 @@ private:
 
 SELF_SERIALIZABLE(StatLogger);
 
+void InitializePathsXFromPaths( ReadPathVecX & pathsX, const HyperBasevectorX & hb,
+     const String paths_file, const size_t BATCH, const Bool verbose=False );
+
+// Create a vector of integers, one for each read, such that "having two"
+// nonzero elements is enough.  Note nested parallel for loops, not really
+// what we want.
+
+void Computebid( const vec<DataSet> & datasets, const vec<int64_t> & bci,
+     vec<int64_t> & bid );
+
+// this computes bid on-the-fly
+
+int64_t bidc( const vec<DataSet> & datasets, const vec<int> & bc,
+     const int64_t & id );
+
 template<int K> void MapClosures( const HyperBasevectorX& hb,
      const vec<basevector>& closures, ReadPathVec& clop );
 
@@ -421,7 +462,8 @@ template class OuterVec< SerfVec<trip> >;
 int64_t EstimateGEMCount( const vec<int64_t> & bci, const int64_t TOTAL_DIVERSITY);
 void SanityCheckBarcodeCounts( const vec<int64_t>& bci );
 
-void MakeDots( int& done, int& ndots, const int total );
+template <class T>
+void MakeDots( T& done, T& ndots, const T total );
 
 void SuperToSeqGraph( const HyperBasevectorX& hb, const digraphE<vec<int>>& D,
      HyperBasevectorX& hbd );

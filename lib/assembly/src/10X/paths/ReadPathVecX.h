@@ -72,6 +72,8 @@ public:
     // appends chunks of ReadPathVecXs
     void append(const ReadPathVecX& rpvx);
 
+    void append(const vec<ReadPathVecX>& blocks);
+
     void append(const ReadPathVec& paths, const HyperBasevectorX& hb);
 
     void append(const ReadPathVec& paths, const HyperBasevectorX& hb, const int64_t sid, const int64_t numReads);
@@ -115,6 +117,8 @@ public:
     ~ReadPathVecX();
 
     void destroy();
+
+    void clear();
 
     /* P S E D O   M O D I F I E R S   &   A C C E S S O R S  F U N C T I O N S */
 
@@ -167,10 +171,12 @@ public:
     // write binary format (ignoring '|' delimiter): 
     // SKIP|bin|STID|bin|EDID|bin|ZDTA|bin|ZIDX|bin
     void readBinary(std::string pathname);
+    void readBinary(BinaryReader& reader);
     void ReadAll(std::string pathname);
 
     void writeBinary(std::string pathname) const;
     void WriteAll(std::string pathname) const;
+    void writeBinary(BinaryWriter& writer) const;
 
 private:
 

@@ -492,14 +492,14 @@ unsigned int SmithWatAffine( const basevector& S, const basevector& T,
      for ( unsigned int i = 1; i <= n; i++ )
      {    score_x[i][0] = Infinity;
 	  score_y[i][0] = Infinity;
-          score_z[i][0] = gap_open_penalty + gap_extend_penalty * i;
+          score_z[i][0] = gap_open_penalty + gap_extend_penalty * (i-1);
 	  x_from[i][0] = 's';
 	  y_from[i][0] = 's';
 	  z_from[i][0] = 's';   }
 
      for ( unsigned int j = 1; j <= N; j++)
        {  score_x[0][j] = Infinity;
-          score_y[0][j] = (penalize_left_gap ? gap_open_penalty + gap_extend_penalty * j : 0);
+          score_y[0][j] = (penalize_left_gap ? gap_open_penalty + gap_extend_penalty * (j-1) : 0);
 	  score_z[0][j] = Infinity;
 	  x_from[0][j] = 's';
 	  y_from[0][j] = 's';

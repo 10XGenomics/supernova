@@ -58,7 +58,7 @@ void newUnpackBarcodeSortedFastq( const String& file, vecbasevector& b0_bases,
           vec<uint32_t>& bcs )
 {
      // TODO: work for non-gzipped
-     ForceAssert(file.EndsWith(".fastq.gz"));
+     ForceAssert(file.EndsWith(".fastq.gz") || file.EndsWith(".fasth.gz"));
 
      cout << Date() << ": " << file << endl;
 
@@ -84,6 +84,9 @@ void newUnpackBarcodeSortedFastq( const String& file, vecbasevector& b0_bases,
                     getline(input, buf); line++;
                     if ( input.fail() ) throw ParseError(buf);
 
+                    for ( auto& c : buf )
+                         if ( c == 'n' || c == 'N' ) c = 'A';
+
                     switch( blocki ) {
                          case READ1:
                               btmp[0].SetFromStringWithNs( buf );
@@ -102,6 +105,7 @@ void newUnpackBarcodeSortedFastq( const String& file, vecbasevector& b0_bases,
                               // presence of a gem group, but lack of a barcode indicates no barcode read
                               // AND no whitelist.  Treat them the same.
                               if ( hasGemGroup( buf ) && buf[0] != '-' ) {
+                                   buf = buf.SafeBefore(",");              // new FASTH format has un-corrected barcode after the comma
                                    if ( lastb != buf ) {    // should trigger 1st time
                                         barc++;             // ...so 1st bc is 1
                                         lastb = buf;

@@ -5,6 +5,9 @@
 //  without any warranty or guaranteed support whatsoever. The Broad      //
 //  Institute is not responsible for its use, misuse, or functionality.   //
 ////////////////////////////////////////////////////////////////////////////
+//
+// MakeDepend: archived
+//
 /*
  * \file MakeDepend.cc
  * \author tsharpe

@@ -23,9 +23,9 @@
 // (b) a gap opening scores +12
 // (c) a gap extension scores +1
 //
-// Does not yet handle free left/right gaps (i.e. penalize_left_gap
-// and penalize_right_gap must be true.
-
+// The handling of penalize_left_gap=false and penalize_right_gap=false by 
+// SmithWatAffine is semicorrect.  It appears to work if the gap is on the first
+// sequence, but not for the second.  Not sure about the other versions.
 
 unsigned int SmithWatAffine( const basevector& S, const basevector& T,
 			     alignment& a,

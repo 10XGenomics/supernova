@@ -1124,7 +1124,8 @@ void PrintWithSep(ostream & out, unsigned int val, char sep) {
 
 void Scram( const int status )
 {
-    MempoolFinder::getInstance().doLeakReport(false);
+    if ( MempoolFinder::doesInstanceExist() ) 
+        MempoolFinder::getInstance().doLeakReport(false);
     exit(status);
 }
 
@@ -1166,3 +1167,27 @@ int64_t MemReallyAvailable( )
      {    cout << "\nProblem reading /proc/meminfo." << endl << endl;
           Scram(1);    }
      return 1024 * ( free + cached );    }
+
+
+// returns -1 on error or count of open files for this process
+int32_t NumOpenFiles()
+{
+     String procfsfd("/proc/self/fd");
+     if ( !IsDirectory( procfsfd ) ) {
+          procfsfd= String("/proc/") + ToString(getpid()) + "/fd";
+          if ( !IsDirectory( procfsfd ) )
+               return -1;
+     }
+
+    DIR* dir_ptr = opendir( procfsfd.c_str( ));
+    if ( !dir_ptr ) return -1;
+
+    int32_t count=0;
+
+    for ( struct dirent* dirent_ptr = readdir(dir_ptr); 
+              dirent_ptr != nullptr; dirent_ptr = readdir(dir_ptr) )
+         count++;
+
+    closedir( dir_ptr );
+    return count;
+}

@@ -14,4 +14,12 @@ void Scaffold( const HyperBasevectorX& hb, const vec<int>& inv,
      const vec<DataSet>& datasets, const Bool verbose, String& link_report,
      const Bool single );
 
+
+void ScaffoldLowMem( const HyperBasevectorX& hb, const vec<int>& inv,
+     const VecIntVec& ebcx, digraphE<vec<int>>& D, vec<int>& dinv, 
+     const ReadPathVec& dpaths, const vec<int64_t>& bid, 
+     const vec<DataSet>& datasets, const Bool verbose, String& link_report,
+     const Bool single );
+
+
 #endif

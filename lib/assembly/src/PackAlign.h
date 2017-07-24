@@ -530,6 +530,9 @@ class align {
        if ( a1.lengths_ < a2.lengths_ ) return True;
        return False;    }
 
+  friend Bool operator>( const align& a1, const align& a2 )
+  {    return a2 < a1;    }
+
   ///Return a pair with insertion and deletion information.
   /// first = gaps on 1, second = gaps on 2.
   std::pair<int,int> Gap1Gap2() const;

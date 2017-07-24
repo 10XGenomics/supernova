@@ -55,7 +55,7 @@ void PrintVisualAlignmentClean( Bool abbreviate, ostream& out, const BASEVEC1& r
           if ( in.fail( ) ) break;
           lines.push_back(line);    }
      if ( lines.nonempty( ) && lines[0].Contains( "(p", 0 ) )
-     {    out << "\n" << lines[0] << "\n\n";
+     {    out << "\n" << lines[0] << "\n";
           return;    }
      int start = 0;
      if ( lines.size( ) >= 2 && WhiteSpaceFree(lines[0]).empty( ) 

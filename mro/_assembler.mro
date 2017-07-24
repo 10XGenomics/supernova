@@ -1,0 +1,94 @@
+#
+# Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
+#
+
+@include "_preflight_stages.mro"
+@include "_assembler_prep.mro"
+@include "_asm_sn.mro"
+
+pipeline _ASSEMBLER(
+    in  string   pipeline_id,
+    in  string   sample_id,
+    in  string   fastq_mode         "configuration of the input fastqs",
+    in  string   sample_desc,
+    in  map[]    sample_def,
+    in  string   barcode_whitelist  "name of barcode whitelist file",
+    in  int      trim_length,
+    in  string   known_sample_id,
+    in  map      downsample,
+    in  bool     nodebugmem,
+    in  map      addin,
+    out path     assembly     "Raw assembly files",
+    out csv      summary      "Run summary",
+    out txt      report       "Run report",
+)
+{
+    call preflight ASSEMBLER_PREFLIGHT(
+        input_mode        = self.fastq_mode,
+        sample_def        = self.sample_def,
+        barcode_whitelist = self.barcode_whitelist,
+        downsample        = self.downsample,
+        check_executables = true,
+    )
+
+    call _ASSEMBLER_PREP(
+        sample_id = self.sample_id,
+        fastq_mode = self.fastq_mode,
+        sample_def = self.sample_def,
+        barcode_whitelist = self.barcode_whitelist,
+        trim_length = self.trim_length,
+        downsample = self.downsample,
+    )
+
+    call _ASM_SN(
+        min_kmer_obs = 3,
+        fastqs = _ASSEMBLER_PREP.fqreads,
+        barcode_whitelist = _ASSEMBLER_PREP.barcode_whitelist_path,
+    )
+
+    call volatile ASSEMBLER_DF(
+        sample_id       = self.sample_id,
+        sample_desc     = self.sample_desc,
+        reads           = _ASSEMBLER_PREP.reads,
+        quals           = _ASSEMBLER_PREP.quals,
+        bci             = _ASSEMBLER_PREP.bci,
+        downsample      = self.downsample,
+        nodebugmem      = self.nodebugmem,
+        mspedges        = _ASM_SN.asm_graph,
+        known_sample_id = self.known_sample_id,
+        addin           = self.addin,
+        pipeline_id     = self.pipeline_id,
+    )
+
+    call volatile ASSEMBLER_TR(
+        sample_id       = self.sample_id,
+        sample_desc     = self.sample_desc,
+        parent_dir      = ASSEMBLER_DF,
+        known_sample_id = self.known_sample_id,
+        addin           = self.addin,
+    )
+
+    call volatile ASSEMBLER_MC(
+        sample_id       = self.sample_id,
+        sample_desc     = self.sample_desc,
+        parent_dir      = ASSEMBLER_TR,
+        known_sample_id = self.known_sample_id,
+        addin           = self.addin,
+    )
+
+    call ASSEMBLER_CP(
+        sample_id       = self.sample_id,
+        sample_desc     = self.sample_desc,
+        parent_dir      = ASSEMBLER_MC,
+        known_sample_id = self.known_sample_id,
+        addin           = self.addin,
+        nodebugmem      = self.nodebugmem,
+    )
+
+    return(
+        assembly = ASSEMBLER_CP,
+        summary = ASSEMBLER_CP.summary_cs,
+        report = ASSEMBLER_CP.report,
+    )
+
+}

@@ -21,6 +21,10 @@
 #include "paths/HyperBasevector.h"
 #include "paths/long/ReadPath.h"
 
+void buildGraphFromMSP( String const& work_dir, String const& reads_name, 
+          String const& quals_name, String const& MSPEDGES, HyperBasevector& hbv, 
+          const int K, ReadPathVec& paths);
+
 void buildReadQGraph48(String const& work_dir, String const& read_head, 
                         std::string const mspFilename,
                         vecbvec& reads, ObjectManager<VecPQVec>& quals,

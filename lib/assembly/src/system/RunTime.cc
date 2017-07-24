@@ -42,6 +42,118 @@
 
 /// ===========================================================================
 ///
+/// dumps memory info to stdout
+///
+/// ===========================================================================
+ostream& PrettyPrintNum(uint64_t num, ostream& out){
+    int chunk[7] = {0,0,0,0,0,0,0}; // max 7 chunks
+    uint64_t a = 0;
+
+    // get chunks
+    for(int i = 0; i < 7; i++){
+        a = num/1000;
+        chunk[6-i] = num-a*1000;
+        num = a;
+    }
+   
+    // count spaces
+    int b = 0;
+    while(chunk[b] == 0) b++;
+
+    // pretty print
+    for(int i = 0; i < 4*b; i++)
+        out << " ";
+    for(int i = b; i < 7; i++){
+        int c = chunk[i], ld = 0;
+        while(c>0){ld ++; c = c/10;}
+        for(int s = 0; s < (3-ld); s++){
+            if(i==b) out << " ";
+            else out << "0";
+        }
+        if(chunk[i])
+            out << chunk[i];
+        if(i!=6)
+            out <<",";
+    }
+
+    return out;
+}
+
+void dump_meminfo(){
+     {        
+          cout<<"bytes in use before   : "; 
+          PrettyPrintNum(MemUsageBytes( ),cout); 
+          cout<<endl;
+          cout<<"theoretical max bytes : ";
+          PrettyPrintNum(physicalMemory( ),cout);
+          cout<<endl;
+     }
+     // Show other interesting variables.
+     {    vec<vec<String>> rows;
+          vec<String> row = { "ABBREV", "DEFINITION", "VALUE", "UNITS" };
+          rows.push_back(row);
+          if ( IsRegularFile( "/proc/self/statm" ) )
+          {    int64_t statm2 = StringOfFile("/proc/self/statm",2 ).Int( );
+               row = { "statm2", "/proc/self/statm, column 2",
+                    ToStringAddCommas(statm2), "pages" };
+               rows.push_back(row);    }
+          row = { "pagesize", "sysconf(_SC_PAGESIZE)",
+               ToStringAddCommas( sysconf(_SC_PAGESIZE) ), "bytes" };
+          rows.push_back(row);
+          row = { "phys_pages", "sysconf(_SC_PHYS_PAGES)",
+               ToStringAddCommas( sysconf(_SC_PHYS_PAGES) ), "pages" };
+          rows.push_back(row);
+          struct rusage my_rusage;
+          getrusage(RUSAGE_SELF, &my_rusage);
+          row = { "maxrss", "maxrss from getrusage for RUSAGE_SELF",
+               ToStringAddCommas(my_rusage.ru_maxrss), "bytes" };
+          rows.push_back(row);
+          if ( IsRegularFile( "/proc/meminfo" ) )
+          {    Ifstream( in, "/proc/meminfo" );
+               String line;
+               int64_t free = -1, cached = -1;
+               while(1)
+               {    getline( in, line );
+                    if ( !in ) break;
+                    if ( line.Contains( "MemFree:", 0 ) 
+                              && line.Contains( " kB", -1 ) )
+                    {    line = line.RevBefore( " kB" );
+                         line = line.RevAfter( " " );
+                         free = line.Int( );    }
+                    if ( line.Contains( "Cached:", 0 ) 
+                         && line.Contains( " kB", -1 ) )
+                    {    line = line.RevBefore( " kB" );
+                         line = line.RevAfter( " " );
+                         cached = line.Int( );    }    }
+               if ( free >= 0 )
+               {    row = { "free", "/proc/meminfo at MemFree",
+                         ToStringAddCommas( 1024 * free ), "bytes" };
+                    rows.push_back(row);    }
+               if ( free >= 0 )
+               {    row = { "cached", "/proc/meminfo at Cached",
+                         ToStringAddCommas( 1024 * cached ), "bytes" };
+                    rows.push_back(row);    }    }
+          cout << "-----------------------------------------------------------"
+               << "---------------------" << endl;
+          cout << "DETAILED MEMORY STATS" << endl;
+          PrintTabular( cout, rows, 2, "llr" );     }
+
+          // Look for competing processes
+     {    cout << "-----------------------------------------------------------"
+               << "---------------------" << endl;
+          cout << "Top memory processes on this server now "
+               << "(may not work):" << endl;
+          System( "ps --sort=-rss -eo pid,pmem,rss,comm,uid | head -6 | "
+               "awk '{ printf \"%8s %5s %12s %5.5s %s\\n\", "
+               "$1, $2, $3, $4, $5 ;}'"
+               );
+          // top -b -n 1 -a | tail -n +7 | head -6" );
+          cout << "-----------------------------------------------------------"
+               << "---------------------" << endl;  }
+}
+
+/// ===========================================================================
+///
 /// operator new, that dumps out sensibly if it fails
 ///
 /// ===========================================================================
@@ -87,103 +199,12 @@ void* operator new( size_t nbytes )
                cout << "-----------------------------------------------------------"
                     << "---------------------" << endl;
 
-               // If very little memory available, don't use much.
-
-               const size_t MIN_BYTES = 10000;
-               Bool light = False;
-               if ( nbytes <= MIN_BYTES ) light = True;
-               else
-               {    void* q = malloc(MIN_BYTES);
-                    if ( q == 0 ) light = True;
-                    else free(q);    }
-               if (light)
-               {    cout << "bytes requested = " << nbytes << endl;
-                    cout << "bytes in use before = " << MemUsageBytes( ) << endl;
-                    cout << "theoretical max bytes = " << physicalMemory( ) 
-                         << endl;    }
-
-               // Otherwise make nice report.
-
-               else
-               {    vec<vec<String>> rows;
-                    vec<String> row1, row2, row3;
-                    row1.push_back( String("bytes in use before"), 
-                         ToStringAddCommas( MemUsageBytes( ) ) );
-                    row2.push_back( String("bytes requested"), 
-                         ToStringAddCommas(nbytes) );
-                    row3.push_back( String("theoretical max bytes"), 
-                         ToStringAddCommas( physicalMemory( ) ) );
-                    rows.push_back( row1, row2, row3 );
-                    PrintTabular( cout, rows, 2, "lr" );    }
-
-               // Show other interesting variables.
-
-               vec<vec<String>> rows;
-               vec<String> row = { "ABBREV", "DEFINITION", "VALUE", "UNITS" };
-               rows.push_back(row);
-               if ( IsRegularFile( "/proc/self/statm" ) )
-               {    int64_t statm2 = StringOfFile("/proc/self/statm",2 ).Int( );
-                    row = { "statm2", "/proc/self/statm, column 2",
-                         ToStringAddCommas(statm2), "pages" };
-                    rows.push_back(row);    }
-               row = { "pagesize", "sysconf(_SC_PAGESIZE)",
-                    ToStringAddCommas( sysconf(_SC_PAGESIZE) ), "bytes" };
-               rows.push_back(row);
-               row = { "phys_pages", "sysconf(_SC_PHYS_PAGES)",
-                    ToStringAddCommas( sysconf(_SC_PHYS_PAGES) ), "pages" };
-               rows.push_back(row);
-               struct rusage my_rusage;
-               getrusage(RUSAGE_SELF, &my_rusage);
-               row = { "maxrss", "maxrss from getrusage for RUSAGE_SELF",
-                    ToStringAddCommas(my_rusage.ru_maxrss), "bytes" };
-               rows.push_back(row);
-               if ( IsRegularFile( "/proc/meminfo" ) )
-               {    Ifstream( in, "/proc/meminfo" );
-                    String line;
-                    int64_t free = -1, cached = -1;
-                    while(1)
-                    {    getline( in, line );
-                         if ( !in ) break;
-                         if ( line.Contains( "MemFree:", 0 ) 
-                                   && line.Contains( " kB", -1 ) )
-                         {    line = line.RevBefore( " kB" );
-                              line = line.RevAfter( " " );
-                              free = line.Int( );    }
-                         if ( line.Contains( "Cached:", 0 ) 
-                              && line.Contains( " kB", -1 ) )
-                         {    line = line.RevBefore( " kB" );
-                              line = line.RevAfter( " " );
-                              cached = line.Int( );    }    }
-                    if ( free >= 0 )
-                    {    row = { "free", "/proc/meminfo at MemFree",
-                              ToStringAddCommas( 1024 * free ), "bytes" };
-                         rows.push_back(row);    }
-                    if ( free >= 0 )
-                    {    row = { "cached", "/proc/meminfo at Cached",
-                              ToStringAddCommas( 1024 * cached ), "bytes" };
-                         rows.push_back(row);    }    }
-               cout << "-----------------------------------------------------------"
-                    << "---------------------" << endl;
-               cout << "DETAILED MEMORY STATS" << endl;
-               PrintTabular( cout, rows, 2, "llr" );
-
-               // Look for competing processing.
-
-               cout << "-----------------------------------------------------------"
-                    << "---------------------" << endl;
-               cout << "Top memory processes on this server now "
-                    << "(may not work):" << endl;
-               System( "ps --sort=-rss -eo pid,pmem,rss,comm,uid | head -6 | "
-                    "awk '{ printf \"%8s %5s %12s %5.5s %s\\n\", "
-                    "$1, $2, $3, $4, $5 ;}'"
-                    );
-               // top -b -n 1 -a | tail -n +7 | head -6" );
-               cout << "-----------------------------------------------------------"
-                    << "---------------------" << endl;
+               // already light and pretty printing!
+               {    cout << "bytes requested       : ";
+                    PrettyPrintNum(nbytes,cout);
+                    cout<<endl;      }
 
                // Make a stack trace.
-
-               cout << "Stack trace (sometimes informative):" << endl;
                TracebackThisProcess( cout, False, True );
                cout << "-----------------------------------------------------------"
                     << "---------------------" << endl;
@@ -197,7 +218,7 @@ void* operator new( size_t nbytes )
                     << "or reduce your input data amount." << endl
                     << "- Consider specifying MAX_MEM_GB or lowering "
                     << "NUM_THREADS." << endl << endl;
-               _exit(1);    }    }
+               _exit(99);    }    }
      return p;    }
 
 /// ===========================================================================
@@ -378,6 +399,7 @@ Bool IgnoreFunction( String function )
      if ( function.Contains( "Assert", 0 ) ) return True;
      if ( function.Contains( "arachne_signal_handler", 0 ) ) return True;
      if ( function.Contains( "dump_stack", 0 ) ) return True;
+     if ( function.Contains( "dump_meminfo", 0 ) ) return True;
      first_print = False;
      return False;    }
 
@@ -604,6 +626,9 @@ void TracebackThisProcess( ostream& out, Bool exit_when_done, Bool minimal )
           exe = command_name_of_process(pid);
 
      #endif
+
+     // dump some memory info while at it
+     dump_meminfo();
 
      // On Alpha and Intel boxes, we use a built-in stack dump.  Otherwise,
      // call gdb.  None of this will work if you did not compile with g++.
@@ -990,11 +1015,12 @@ void ArachneInterruptHandler(ArachneSignalHandler* pSigFunc)
 //
 // ===============================================================================
 
-void RunTime( int no_dump, ArachneSignalHandler* pSigFunc )
+void RunTime( int no_dump, ArachneSignalHandler* pSigFunc, const Bool decouple )
 {
   // Decouple C-style stdio and C++-style c{out,err,log} streams.
+  // (Can somebody please expand on what this does?)
 
-  ios::sync_with_stdio(false);
+  if (decouple) ios::sync_with_stdio(false);
 
   // Turn off core dumps.
 

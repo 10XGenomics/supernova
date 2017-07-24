@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
-     MasterVec<ReadPath>& paths, String pi_file,
+     const ReadPathVecX & pathsX, String pi_file,
      const vec<Bool>& bad,
      vec< pair<int,int> >& pairs, const vec<DataSet>& datasets,
      const vec<int32_t>& bc, const Bool one_good );

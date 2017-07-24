@@ -1,0 +1,50 @@
+[package]
+name = "tada"
+version = "0.3.0"
+authors = [ "Patrick Marks <patrick@10xgenomics.com>" ]
+build = "build.rs"
+
+[dependencies]
+byteorder = "*"
+flate2 = { git = "https://github.com/alexcrichton/flate2-rs.git", rev="39812e6017948e8"}
+docopt="*"
+bincode="*"
+serde="*"
+rustc-serialize = "*"
+linked-hash-map = "*"
+bio = "*"
+rand = "*"
+time = "*"
+chrono = "*"
+itertools = "0.5.2"
+log = "*"
+env_logger = "*"
+csv = "*"
+crossbeam = "*"
+rayon = ">=0.5.0"
+libc = "*"
+bit-set = "0.4.0"
+tempfile = "*"
+nix = "*"
+backtrace = "*"
+lz4 = "*"
+smallvec = "*"
+shardio = { path = "external/rust-shardio" }
+martian = { path = "external/martian" }
+fastq_10x = { path = "external/rust-fastq-10x" }
+rustc_version_runtime = "*"
+
+[dev-dependencies]
+quickcheck = "0.3"
+
+[profile.release]
+opt-level = 3
+debug = true
+
+[lib]
+name = "tada"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tada"
+doc = false

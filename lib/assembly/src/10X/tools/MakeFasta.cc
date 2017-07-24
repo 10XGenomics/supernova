@@ -55,6 +55,7 @@ int main( int argc, char *argv[] )
      CommandArgument_UnsignedInt_OrDefault_Doc(MINSIZE, 1000, "minimum FASTA record size (except for 'raw')" );
      CommandArgument_String_OrDefault_Valid_Doc(FLAVOR, "megabubbles", sflavors,
                "output flavor, please see documentation at http://software.10xgenomics.com/supernova" );
+     CommandArgument_Bool_OrDefault_Doc(HINDEX, False, "write an index file demonstrating correspondence between pseudohaplotypes (pseudohap2 only)");
 
 #if !defined(CS)
      // These arguments are hidden from user
@@ -68,7 +69,8 @@ int main( int argc, char *argv[] )
 #endif
      EndCommandArguments;
 
-
+     if (HINDEX && FLAVOR != "pseudohap2" )
+          FatalErr("HINDEX mode must be used with the 'pseudohap2' flavor");
 
      int nflavor = Position( vflavors, FLAVOR );
      if ( nflavor < 0 ) FatalErr( "unknown output flavor: " + FLAVOR );
@@ -142,7 +144,7 @@ int main( int argc, char *argv[] )
           String fasta_fn = OUT_HEAD+".fasta";
 
           // TODO: gap absorb needs to be pulled out of ScaflinePrinter if it's going to be here...
-          FastaEdgeWriter fWriter(fasta_fn, version, hbd2.K(), False /* abbrev */, True /* absorb gaps */, LOG, False /* skip gaps */, SEQ_IDS, 0 /* minsize */);
+          FastaEdgeWriter fWriter(fasta_fn, version, hbd2.K(), False /* abbrev */, True /* absorb gaps */, LOG, "", False /* skip gaps */, SEQ_IDS, 0 /* minsize */);
 
           vec<Bool> used;
           hbd2.Used(used);
@@ -178,7 +180,7 @@ int main( int argc, char *argv[] )
           String fasta_fn = OUT_HEAD+".fasta";
           slp.SetMashMegaBubbles( False );
           cout << Date() << ": writing the FASTA portion of output to " << fasta_fn << endl;
-          FastaEdgeWriter fWriter(fasta_fn, version, hbd.K(), ABBREV, True /* absorb gaps */, LOG, False /* skip gaps */, SEQ_IDS, MINSIZE);
+          FastaEdgeWriter fWriter(fasta_fn, version, hbd.K(), ABBREV, True /* absorb gaps */, LOG, "", False /* skip gaps */, SEQ_IDS, MINSIZE);
           slp.WalkScaffoldLines( fWriter );
           if(ZIP) TXT2GZ(fasta_fn);
      } else if ( FLAVOR == "pseudohap" ) {
@@ -186,7 +188,7 @@ int main( int argc, char *argv[] )
           String fasta_fn = OUT_HEAD+".fasta";
           cout << Date() << ": writing the FASTA portion of output to " << fasta_fn << endl;
           // TODO: gap absorb needs to be pulled out of ScaflinePrinter if it's going to be here...
-          FastaEdgeWriter fWriter(fasta_fn, version, hbd.K(), ABBREV, True /* absorb gaps */, LOG, False /* skip gaps */, SEQ_IDS, MINSIZE);
+          FastaEdgeWriter fWriter(fasta_fn, version, hbd.K(), ABBREV, True /* absorb gaps */, LOG, "", False /* skip gaps */, SEQ_IDS, MINSIZE);
           slp.WalkScaffoldLines( fWriter );
           if(ZIP) TXT2GZ(fasta_fn);
      } else if ( FLAVOR == "pseudohap2" ) {
@@ -195,8 +197,9 @@ int main( int argc, char *argv[] )
                String fasta_fn = OUT_HEAD+"."+ToString(allele+1)+".fasta";
                cout << Date() << ": writing the FASTA portion of output to " << fasta_fn << endl;
                // TODO: gap absorb needs to be pulled out of ScaflinePrinter if it's going to be here...
-               String this_log = LOG.SafeBeforeLast(".") + "." + ToString(allele) + ".log";
-               FastaEdgeWriter fWriter(fasta_fn, version, hbd.K(), ABBREV, True /* absorb gaps */, this_log, False /* skip gaps */, SEQ_IDS, MINSIZE);
+               String this_log = (LOG=="")?(""):(LOG.SafeBeforeLast(".") + "." + ToString(allele) + ".log");
+               String this_index = HINDEX ? OUT_HEAD + "." + ToString(allele+1) + ".idx" : "";
+               FastaEdgeWriter fWriter(fasta_fn, version, hbd.K(), ABBREV, True /* absorb gaps */, this_log, this_index, False /* skip gaps */, SEQ_IDS, MINSIZE);
                slp.WalkScaffoldLines( fWriter, allele );
                if(ZIP) TXT2GZ(fasta_fn);
           }

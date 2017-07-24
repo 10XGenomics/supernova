@@ -11,7 +11,9 @@
 #include "10X/astats/RefLookup.h"
 #include "10X/DfTools.h"
 #include "10X/PathsIndex.h"
+#include "10X/astats/BaseFinLookup.h"
 #include "system/System.h"
+#include "10X/mergers/NicePrints.h"
 
 void FirstLoadData( String const& work_dir, String const& read_head, vec<String>& cleanupFiles,
           Bool const PREDUP, String const& KEEP, String const& R, vec<String> const& lr,
@@ -21,8 +23,12 @@ void FirstLoadData( String const& work_dir, String const& read_head, vec<String>
           vec<String>& subsam_names, vec<int64_t>& subsam_starts, vec<DataSet>& datasets, 
           int & max_read_length )
 {
+     PRINTDEETS("load data");
      auto& quals = quals_om.create();
      LoadData( work_dir, R, lr, LR_SELECT_FRAC, bases, quals_om, bci, subsam_names, subsam_starts, datasets );
+
+     if ( bases.empty( ) )
+          Martian::exit("Supernova has been supplied with zero reads and will terminate.");
 
      cout << "datatypes loaded:" << endl;
      for ( auto const& d : datasets ) cout << "\t" << d << endl;
@@ -71,6 +77,7 @@ void FirstLoadData( String const& work_dir, String const& read_head, vec<String>
      quals_om.unload();
 }
 
+
 int main( int argc, char *argv[] )
 {    RunTime( );
      double all_clock = WallClockTime( );
@@ -84,8 +91,8 @@ int main( int argc, char *argv[] )
      // cleaner would be "PD" versions of CommandArguments.  
      // Please follow the lead and keep these grouped.
 #if !defined(CS)
-     CommandArgument_String_OrDefault_Doc(SAMPLE, "NA12878", 
-          "sample name; human or NA12878 or HGP or unknown");
+     CommandArgument_String_OrDefault_Doc(SAMPLE, "unknown", 
+          "sample name; human or NA12878 or HGP or CHM or unknown");
      CommandArgument_String_OrDefault_Doc(R, "",
           "comma-separated list of plain-read input files" );
      CommandArgument_String_OrDefault_Valid_Doc(PIPELINE, "pd", "{cs,pd}",
@@ -106,6 +113,8 @@ int main( int argc, char *argv[] )
 		 "fraction of memory to allow ReadQGrapher to grab" );
      CommandArgument_Bool_OrDefault_Doc(EXIT_LOAD, False,
           "exit after loading and writing data");
+     CommandArgument_Bool_OrDefault_Doc(EXIT_BUILD, False,
+          "exit after building a.48");
      CommandArgument_String_OrDefault_Doc(CHR, "", "if set, only align to this "
           "chromosome, which should be an integer");
      CommandArgument_String_OrDefault_Doc(FINAL, "a.base",
@@ -159,6 +168,7 @@ int main( int argc, char *argv[] )
      Bool STACKSTER_ALT  = False;
      double GRAPHMEM     = 0.9;
      Bool EXIT_LOAD      = False;
+     Bool EXIT_BUILD     = False;
      String CHR          = "";
      String FINAL        = "a.base";
      String GRAPH        = "";
@@ -191,6 +201,8 @@ int main( int argc, char *argv[] )
      CommandArgument_Double_OrDefault_Doc(MAX_MEM_GB, 0,
           "if specified, maximum *suggested* RAM use in GB; in some cases may be "
           "exceeded by our code");
+     CommandArgument_String_OrDefault_Doc(MSPEDGES, "",
+          "Edges from the MSP stage" );
      
      EndCommandArguments;
 
@@ -224,13 +236,15 @@ int main( int argc, char *argv[] )
      String fin_dir = work_dir + "/" + FINAL;
      if ( KEEP != "none" ) Mkdir777(fin_dir);
 
+     Mkdir777(work_dir + "/stats" );
+
      // Initialize martian alert logger
      // after OUT_DIR has been created
      Martian::init(work_dir);
      
-     // Initialize logger
+     // Initialize logger, and set logging to verbose
      StatLogger::init("", work_dir + "/alerts.list");
-
+     StatLogger::setSilent( false );
 
      MaybeWriter finalWriter( KEEP != "none" );        // conditions determine whether these actually emit files or not
      MaybeWriter nonFinalWriter( KEEP == "all" );      // usage: finalWriter.writeFiles( filename, obj ) same as
@@ -272,10 +286,10 @@ int main( int argc, char *argv[] )
           hostname = hostname.substr( 0, hostname.find('.') );
           OfstreamMode( xout, work_dir + "/the_command", ios::app );
           xout << "\n" << hostname << ": " << command.TheCommand( ) << endl;    
-          // write commit hash
-          Ofstream( yout, work_dir + "/.commit_hash" );
-          yout << command.GetCommitHash( );
-          }
+          // log commit hash
+          StatLogger::log( "commit_hash", command.GetCommitHash(), "git commit hash" );
+          StatLogger::log( "software_release", command.GetRelease(), "git software tag/release");
+     }
      String run_head = work_dir + "/a";
      String tmp_dir1 = work_dir + "/data";
      Mkdir777(tmp_dir1);
@@ -420,6 +434,7 @@ int main( int argc, char *argv[] )
                if ( d.dt == ReadDataType::UNBAR_10X )
                     unbar_start = d.start;
           }
+
           // this is the fraction of 10X reads that have whitelisted barcodes 
           double valid_bc_perc = 0;
           if (total_reads > unbar_start )
@@ -429,6 +444,8 @@ int main( int argc, char *argv[] )
           StatLogger::log( "valid_bc_perc", valid_bc_perc, \
                "% reads with valid barcodes", true);
           StatLogger::issue_alert( "valid_bc_perc", valid_bc_perc );
+          StatLogger::log( "unbar_perc", 100-valid_bc_perc, 
+               "pct of reads that are not barcoded", true);
      }
      cout << Date() << ": " << ToStringAddCommas(bases.size()) << " total reads loaded (R+LR)." << endl;
      MEM(reads_loaded);
@@ -453,6 +470,7 @@ int main( int argc, char *argv[] )
 
      // Report some data stats.
 
+     StatLogger::log( "nreads", bases.size(), "number of reads", true);
      if ( START != "alltinks" )
      {    int min_read = 1000000000, max_read = 0;
           int64_t total_bases = 0, total_kmers = 0;
@@ -462,6 +480,11 @@ int main( int argc, char *argv[] )
                total_bases += bases[i].size( );
                if ( bases[i].isize( ) >= K )
                     total_kmers += bases[i].isize( ) - K + 1;    }
+          double bases_per_read = double(total_bases)/double(bases.size());
+          StatLogger::log( 
+               "bases_per_read", bases_per_read, "mean bases per read", true );
+
+
           cout << "read sizes: ";
           if ( min_read == max_read ) cout << min_read;
           else cout << min_read << "-" << max_read;
@@ -505,13 +528,15 @@ int main( int argc, char *argv[] )
      cleanupFiles.push_back( work_dir + "/genome.ambint" );
      cleanupFiles.push_back( work_dir + "/genome.names" );
 
+     Destroy( lens );
+
      // Set up assembly data structures.
 
      HyperBasevector hbv;
      HyperBasevectorX hb;
      vec<int> inv;
      ReadPathVec paths;
-     VecULongVec paths_index;
+     ReadPathVecX pathsX;
      vecbasevector genome;
      vec< pair<int,ho_interval> > ambint;
      
@@ -528,7 +553,7 @@ int main( int argc, char *argv[] )
      if ( IsRegularFile(work_dir+"/sample") ) 
           Remove(work_dir+"/sample");
      if (SAMPLE != "unknown")
-     {    FetchFinished( SAMPLE, G );
+     {    FetchFinished( SAMPLE, G, -1 );
           Ofstream( out, work_dir + "/sample" );
           out << SAMPLE << endl;    
      } 
@@ -537,34 +562,52 @@ int main( int argc, char *argv[] )
      // Now make the hbv.
      vec<Bool> dup;
      if ( start.at_or_before("loaded") ) {
-         // TODO: WAIT
-          StageBuildGraph( K, bases, quals_om, MIN_QUAL, MIN_FREQ, MIN_BC,
+          // write files here
+          String dir = work_dir + "/a." + ToString(K);
+          Mkdir777( dir );
+          // TODO: WAIT
+          StageBuildGraph( MSPEDGES, K, bases, quals_om, MIN_QUAL, MIN_FREQ, MIN_BC,
                     bc, bc_start, GRAPH, GRAPHMEM, work_dir, read_head,
                     hbv, paths, inv);
           
-          // write files here
-          String dir = work_dir + "/a." + ToString(K);
+          // Read in tmp.paths as pathsX here
+          cout << Date( ) << ": reading in paths --> pathsX, mem = "
+               << MemUsageGBString() << endl;
+          {
+               hb = HyperBasevectorX( hbv );
+               const size_t READ_BATCH_SIZE=100000000;
+               InitializePathsXFromPaths( pathsX, hb, work_dir + "/tmp.paths", 
+                    READ_BATCH_SIZE, False );
+               cout << Date( ) << ": done, mem = "
+                    << MemUsageGBString() << endl;
+          }
+          Rename( work_dir + "/tmp.paths", dir + "/a.paths" );
+
           cout << Date( ) << ": inverting paths index, mem usage = "
                << MemUsageGBString( ) << endl;
-          Mkdir777( dir );
-          writePathsIndex( paths, inv, dir, "a.paths.inv", "a.countsb", 
+          writePathsIndex( pathsX, hb, inv, dir, "a.paths.inv", "a.countsb", 
                            PI_CHUNKS, false ); // no verbose
           
           if ( KEEP == "all" ) {
-               WriteAssemblyFiles( hbv, inv, paths, paths_index, bci, ALIGN,
-                    genome, dir, alignsb );
+               WriteAssemblyFiles( hbv, inv, pathsX, ALIGN, genome, dir, alignsb );
           }
-
+          cout << Date( ) << ": reading in read bases" << endl;
+          bases.ReadAll( work_dir + "/data/frag_reads_orig.fastb" );
+          cout << Date( ) << ": done, mem = " << MemUsageGBString() << endl;
           VirtualMasterVec<PQVec> vmv( quals_om.filename() );
           double interdup_rate;
-          MarkDups( bases, vmv, paths, bc, dup, interdup_rate );
+          MarkDups( bases, vmv, pathsX, hb, bc, dup, interdup_rate );
           nonFinalWriter.writeFile( work_dir + "/a." + ToString(K) + "/a.dup", dup);
+     }
+
+     if ( EXIT_BUILD ) {
+          cout << "exiting due to EXIT_BUILD=True" << endl;
+          Scram(0);
      }
 
      // Start to patch gaps.
      vec<basevector> closures;
      vec<Bool> bad;
-     ReadPathVecX pathsX;
      
      if ( start.at("patch") ) {
           cout << Date()  << ": starting at patch... reading data" << endl;
@@ -573,16 +616,17 @@ int main( int argc, char *argv[] )
           BinaryReader::readFile( dir + "/a.hbv", &hbv );
           BinaryReader::readFile( dir + "/a.hbx", &hb );
           BinaryReader::readFile( dir + "/a.inv", &inv );
-          paths.ReadAll( dir + "/a.paths" );
+          cout << Date( ) << ": reading in pathsX" << endl;
+          pathsX.ReadAll( dir + "/a.pathsX" );
           if ( !IsRegularFile( dir + "/a.dup" ) ) {
                cout << Date()  << ": dups file missing, recreating it" << endl;
                VirtualMasterVec<PQVec> vmv( quals_om.filename() );
                double interdup_rate;
-               MarkDups( bases, vmv, paths, bc, dup, interdup_rate );
+               MarkDups( bases, vmv, pathsX, hb, bc, dup, interdup_rate );
+               Destroy( pathsX );
                nonFinalWriter.writeFile( dir + "/a.dup", dup);
           } else
                BinaryReader::readFile( dir + "/a.dup", &dup );
-          //paths_index.ReadAll( dir + "/a.paths.inv" );
      }
     
      if ( start.at_or_before("patch") ) {
@@ -590,39 +634,51 @@ int main( int argc, char *argv[] )
           const int max_width = 400;
           vec< pair<int,int> > pairs;
           String paths_index_file = dir + "/a.paths.inv";
-          StagePatch(dir, K, bases, quals_om, hbv, hb, paths, paths_index_file,
-                    inv, dup,
-                    bad, datasets, bc, max_width, ONE_GOOD, closures, pairs, CG2,
-                    STACKSTER, STACKSTER_ALT, RESCUE );
-          Validate( hbv, paths );
+          
+          StageFindPatch(dir, K, bases, quals_om, hbv, hb, pathsX, paths_index_file,
+                    inv, dup, bad, datasets, bc, max_width, ONE_GOOD, closures,
+                    pairs, CG2, STACKSTER, STACKSTER_ALT, RESCUE );
+
+          nonFinalWriter.writeFile( 
+               work_dir + "/a." + ToString(K) + "/a.hops", pairs );
+          nonFinalWriter.writeFile( work_dir + "/a." + ToString(K) + "/a.bad", bad );
+          BinaryWriter::writeFile( work_dir + "/closures.fastb", closures );
+
+          // Destroy unneeded stuff
+          cout << Date() << ": unloading memory, mem = " << MemUsageGBString() << endl;
+          Destroy(pairs);
+          Destroy(bad);
+          Destroy(inv);
+          Destroy(dup);
+          Destroy(bc);
+
+          // only keep hbv, hbx, closures, etc loaded
+          StageInsertPatch(dir, K, hbv, inv, pathsX, closures);
+          Validate( hbv, pathsX );
           cout << Date( ) << ": hbv has checksum " << hbv.CheckSum( ) << endl;
 
           cout << Date() << ": re-read bases :(" << endl;
           bases.ReadAll( work_dir + read_head + ".fastb" );
           cout << Date() << ": re-read bases :( done :)" << endl;
-          nonFinalWriter.writeFile( work_dir + "/a." + ToString(K) + "/a.hops", pairs );
-          nonFinalWriter.writeFile( work_dir + "/a." + ToString(K) + "/a.bad", bad );
-          BinaryWriter::writeFile( work_dir + "/closures.fastb", closures );
+
 
           // Extend paths.
-          //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! CONVERT TO PATHSX HERE !!!!!!!!!!
-          pathsX.parallel_append(paths,hb);
-          Destroy(paths);
-          //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
           double clock5 = WallClockTime( );
-          cout << Date( ) << ": reloading quals, current mem = "
-               << MemUsageGBString( ) << ", peak = "
-               << PeakMemUsageGBString( ) << endl;
           // Note that presumably we could instead bring in quals as a
           // VirtualMasterVec.
-          StageExtension( hbv, inv, bases, quals_om, pathsX, BACK_EXTEND );
-          cout << TimeSince(clock5) << " used in new stuff 5" << endl;
-          cout << "now current mem = " << MemUsageGBString( ) << endl;
+
           // NOTE EXPENSIVE CONVERSION!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           hb = HyperBasevectorX(hbv);
+          Destroy( hbv.FromMutable( ) ), Destroy( hbv.ToMutable( ) );
+          Destroy( hbv.FromEdgeObjMutable( ) ), Destroy( hbv.ToEdgeObjMutable( ) );
+          Destroy( hbv.EdgesMutable( ) );
+          StageExtension( hb, inv, bases, quals_om, pathsX, BACK_EXTEND );
+          cout << TimeSince(clock5) << " used in new stuff 5" << endl;
+          cout << "now current mem = " << MemUsageGBString( ) << endl;
 
           // Write files.
+
           quals_om.unload();
           MEM(patched_write_quals_unload);
           Destroy(bases);
@@ -633,196 +689,28 @@ int main( int argc, char *argv[] )
           Mkdir777( work_dir + "/a.patched" );
           writePathsIndex( pathsX, hb, inv, work_dir + "/a.patched", 
                            "a.paths.inv", "a.countsb", PI_CHUNKS, false );
-          if ( KEEP == "all" ) WriteAssemblyFiles( hbv, inv, pathsX, paths_index,
-               bci, ALIGN, genome, work_dir + "/a.patched", alignsb );
+          if ( KEEP == "all" ) WriteAssemblyFiles( hb, inv, pathsX,
+               ALIGN, genome, work_dir + "/a.patched", alignsb );
 
           // Report assembly statistic.
 
-          {    vec<int> len( hbv.E( ) );
-               for ( int e = 0; e < hbv.E( ); e++ )
-                    len[e] = hbv.Kmers(e);
+          {    vec<int> len( hb.E( ) );
+               for ( int e = 0; e < hb.E( ); e++ ) len[e] = hb.Kmers(e);
                Sort(len);
                cout << "N50 edge length = " << N50(len) << endl;     }
-
-          bases.ReadAll( work_dir + read_head + ".fastb" );
-          MEM(patched_write_reload_bases);
      }
 
-     if ( start.at("trim") ) {
-          cout << Date( ) << ": loading assembly" << endl;
-          #pragma omp parallel sections
-          {
-               #pragma omp section
-               { BinaryReader::readFile( work_dir + "/a.patched/a.hbv", &hbv ); }
-               #pragma omp section
-               { 
-                 BinaryReader::readFile( work_dir + "/a.patched/a.hbx", &hb ); 
-                 pathsX.ReadAll( work_dir +"/a.patched/a.pathsX");
-               }
-               #pragma omp section
-               { BinaryReader::readFile( work_dir + "/a.patched/a.inv", &inv ); }
-          }
-     }
-
-
-     // Trim.
-     vec<int64_t> icount;
-
-     if ( start.at_or_before("trim") ) {
-          String paths_index_file = work_dir + "/a.patched/a.paths.inv";
-          String countsb_file     = work_dir + "/a.patched/a.countsb";
-          // TODO: PATHX CLEANUP( ) IN STAGETRIM
-          StageTrim( hb, hbv, inv, bases, quals_om, pathsX,
-                     paths_index_file, countsb_file, bc);
-          cout << Date( ) << ": hbv has checksum " << hbv.CheckSum( ) << endl;
-          hb = HyperBasevectorX(hbv);
-          Validate( hbv, hb, pathsX );
-          // update paths_index after trimming
-          writePathsIndex( pathsX, hb, inv, fin_dir, "a.paths.inv", "a.countsb", 
-                           PI_CHUNKS, false );
-
-          // Write files.
-          if ( hb.E( ) == 0 )
-               Martian::exit("The assembly graph contains zero edges.");
-          if ( KEEP != "none" )
-          {    
-               WriteAssemblyFiles(hbv, inv, pathsX, paths_index,
-                    bci, (ALIGN || FINAL_ALIGN), genome, fin_dir, alignsb );
-
-               if ( SAMPLE != "unknown" && ( ALIGN || FINAL_ALIGN ) )
-               {    MasterVec< SerfVec<triple<int,int,int> > > alignsb;
-                    const int align_genome_K = 60;
-                    GenomeAlign<align_genome_K>( hb, inv, G, alignsb );
-                    alignsb.WriteAll( fin_dir + "/a.fin.alignsb" );    }
-               else Remove( fin_dir + "/a.fin.alignsb" );
-
-               FragDist( hb, inv, pathsX, icount );
-               // Warn if insert is too short
-               {
-                    int64_t NI = Sum(icount), isum = 0;
-                    int m;
-                    for ( m = 0; m < icount.isize( ); m++ )
-                    {    isum += icount[m];
-                         if ( isum >= NI/2 ) break;    }
-                    StatLogger::log("median_ins_sz", m, "median insert size", true);
-                    StatLogger::issue_alert( "median_ins_sz", m );
-               }
-
-               BinaryWriter::writeFile( fin_dir + "/a.ins_dist", icount );    }
-          else
-               Mkdir777(fin_dir);
-
-     }
-
-     if ( start.at_or_after("dups" ) ) {
-          cout << Date( ) << ": loading assembly" << endl;
-          #pragma omp parallel sections
-          {
-          #pragma omp section
-          {    BinaryReader::readFile( fin_dir + "/a.hbv", &hbv ); }
-          #pragma omp section
-          {    
-               BinaryReader::readFile( fin_dir + "/a.hbx", &hb ); 
-               pathsX.ReadAll( fin_dir +"/a.pathsX");
-          }
-          #pragma omp section
-          {    BinaryReader::readFile( fin_dir + "/a.inv", &inv ); }
-          #pragma omp section
-          {    BinaryReader::readFile( work_dir + "/closures.fastb", &closures ); }
-          #pragma omp section
-          {    if ( ALIGN ) alignsb.ReadAll( fin_dir + "/a.alignsb" ); }
-          #pragma omp section
-          {    BinaryReader::readFile( fin_dir + "/a.ins_dist", &icount ); }
-          }
-     }
-
-     // Mark duplicates and bads.
-     if ( start.at_or_before("dups") ) {
-          double interdup_rate;
-          StageDups( hb, bases, quals_om, pathsX, bc, dup, bad, interdup_rate);
-          MEM(before_destroy_bases);
-          Destroy(bases);
-          MEM(before_unload_again);
-          quals_om.unload();
-          MEM(after_unload_again);
-          finalWriter.writeFile( fin_dir + "/a.dup", dup );
-          Ofstream( out, fin_dir + "/a.interdup" );
-          out << interdup_rate << endl;
-          finalWriter.writeFile( fin_dir + "/a.bad", bad );
-
-
-          // Map the closures back to the assembly.  Note that because the assembly
-          // has been trimmed, not all the closures will map back.  Note also that
-          // clop is not sync'ed to closures, in general clop will have less entries
-          // than closures.  And some entries in clop will be zero-length readpaths.
-
-          /*
-          if ( K == 40 ) MapClosures<40>( hb, closures, clop );
-          if ( K == 48 ) MapClosures<48>( hb, closures, clop );
-          if ( K == 60 ) MapClosures<60>( hb, closures, clop );
-          */
-
-          // Compute edge to barcode map.
-          {
-          VecIntVec ebcx;
-          StageEBC( pathsX, hb, bc, inv, bci, ebcx );
-
-          if (KEEP != "none") ebcx.WriteAll( fin_dir + "/a.ebcx" );
-          }
-
-          // Make closures and the graph from them.
-
-          {
-          vec<vec<int>> all_closures;
-          digraphE<vec<int>> D;
-          vec<int> dinv;
-          String paths_index_file = fin_dir + "/a.paths.inv";
-          Mkdir777( fin_dir + "/orig" );
-          StageClosures( hb, inv, pathsX, paths_index_file, dup, bad, all_closures,
-                         D, dinv, fin_dir );
-          const int64_t base_checksum = hbv.CheckSum( );
-          cout << Date( ) << ": hbv has checksum " << base_checksum << endl;
-          StatLogger::log("base_checksum", base_checksum, "Base checksum");
-          cout << Date( ) << ": D has checksum " << D.CheckSum( ) << endl;
-          finalWriter.writeFile( fin_dir + "/orig/a.sup", D );
-          finalWriter.writeFile( fin_dir + "/orig/a.sup.inv" , dinv );
-          // finalWriter.writeFile( fin_dir + "/orig/a.all_closures", all_closures );
-          }
-     }
-
-     // Find barcode links.
-
-     vec< triple<int,int,int> > qept;
-     VecIntVec ebcx;
-
-     if ( start.at("alltinks") ) {
-          BinaryReader::readFile( fin_dir + "/a.dup", &dup );
-          BinaryReader::readFile( fin_dir + "/a.bad", &bad );
-     }
-     if ( start.at_or_before("alltinks") ) {
-          STAGE(AllTinks);
-          ebcx.ReadAll( fin_dir + "/a.ebcx" );
-          AllTinksCore( hb, inv, pathsX, bci, ebcx, qept );
-          finalWriter.writeFile( fin_dir + "/a.bc_links", qept );
-     }
-
-     cout << "\n" << Date( ) << ": done, " << TimeSince(all_clock)
-          << " used, peak mem = " << PeakMemUsageGBString( ) << endl << endl;
-
-     if (KEEP=="none")
-     {
-          cout << Date() << ": Removing files because KEEP=none:" << endl;
-          for ( auto const& fn : cleanupFiles ) {
-               cout << "\t" << fn << endl;
-               Remove(fn);
-          }
-     }
      // Record etime, peak mem
+
      double etime = (WallClockTime( ) - all_clock)/(60.*60.);
      StatLogger::log( "etime_df_h", etime, "Elapsed time DF" );
      StatLogger::log( "mem_peak_df_gb", PeakMemUsageGB(), "Mem peak DF (gb)" );
 
      // Done.
+
+     cout << "\n" << Date( ) << ": done, time used = " << TimeSince(all_clock)
+          << ", peak mem = " << PeakMemUsageGBString( ) << endl;
+
      StatLogger::write( fin_dir + "/a.perf_stats" );
 #ifdef JEMALLOC_HOOKS
      if ( JE_STATS ) (void) je_malloc_stats_print(nullptr, nullptr, nullptr);
@@ -830,4 +718,3 @@ int main( int argc, char *argv[] )
 
      Scram(0);
 }
-

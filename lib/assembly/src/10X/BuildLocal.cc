@@ -13,7 +13,7 @@
 #include "paths/HyperBasevector.h"
 #include "paths/long/ReadPath.h"
 #include "paths/long/large/Lines.h"
-#include "10X/ClosuresToGraph.h"
+#include "10X/mergers/ClosuresToGraph.h"
 #include "10X/DfTools.h"
 #include "10X/Gap.h"
 #include "10X/Heuristics.h"
@@ -95,18 +95,21 @@ template<class VA, class VE> void BuildLocal1(
           if ( b.isize( ) <= MAX_BARCODES ) break;    }
      #pragma omp critical
      {    c1 += WallClockTime( );    }
+     // if already grabbed enuf bc, go home
      if ( b.isize( ) > MAX_BARCODES ) return;
      if (verbose) cout << Date( ) << ": used " << b.size( ) << " barcodes" << endl;
      ForceAssert( !BinMember( b, 0 ) ); // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
      // Make sure we're under MAX_READS.
-
      if ( MAX_READS >= 0 )
-     {    vec<int64_t> bs( b.size( ) );
+     {    // barcode support (in terms of number of reads per bc)
+          vec<int64_t> bs( b.size( ) );
           for ( int i = 0; i < b.isize( ); i++ )
                bs[i] = bci[ b[i] + 1 ] - bci[ b[i] ];
+          // sort barcodes in order of least support to max support
           SortSync( bs, b );
           int64_t sum = Sum(bs);
+          // removed barcodes with too many reads until we're under max_reads
           while ( sum > MAX_READS )
           {    sum -= bs.back( );
                bs.pop_back( );
@@ -120,18 +123,26 @@ template<class VA, class VE> void BuildLocal1(
      {    c2a -= WallClockTime( );    }
      if (verbose) cout << Date( ) << ": finding strong edges" << endl;
      const int MIN_BC = 2;
+     // edge support
      vec<int> es;
+     // edge support barcode
      vec< pair<int,int> > esb;
-     {    for ( int i = 0; i < b.isize( ); i++ )
+     {    // for each bc and each read in that bc
+          for ( int i = 0; i < b.isize( ); i++ )
           for ( int64_t id = bci[ b[i] ]; id < bci[ b[i] + 1 ]; id++ )
           {    // Dup test turned on makes results slightly worse.
                if ( dup[id/2] ) continue;
+               // superfluous!
                if ( internal[id] ) continue;
+               // grab readpath
                ReadPath p;
                paths.unzip(p,hb,id);
+               // store min edge support for barcode
                for ( int j = 0; j < (int) p.size( ); j++ )
                     esb.push( Min( p[j], inv[ p[j] ] ), b[i] );    }
+          // grab unique min edge support
           UniqueSort(esb);
+          // store only strong edges that have more than MIN_BC bc
           for ( int i = 0; i < esb.isize( ); i++ )
           {    int j;
                for ( j = i + 1; j < esb.isize( ); j++ )
@@ -139,8 +150,10 @@ template<class VA, class VE> void BuildLocal1(
                if ( j - i >= MIN_BC ) 
                     es.push_back( esb[i].first, inv[ esb[i].first ] );
                i = j - 1;    }
+          // definitely store edges forming superedge s1 to ensure glueing there
           for ( int j = 0; j < D.O(s1).isize( ); j++ )
                es.push_back( D.O(s1)[j], inv[ D.O(s1)[j] ] );
+          // definitely store edges forming superedge s2 to ensure glueing there
           for ( int l = 0; l < s2s.isize( ); l++ )
           {    int s2 = s2s[l];
 
@@ -1036,7 +1049,8 @@ void Surgery( const HyperBasevectorX& hb, const vec<int>& inv,
           // Validate( hb, inv, D, dinv );    
                }
      cout << Date( ) << ": total uncaptured gaps closed = " << nclosed << endl;
-     Validate( hb, inv, D, dinv );    }
+//     Validate( hb, inv, D, dinv );
+}
 
 template<class VP2, class VI, class VA, class VE> void Unvoid( 
      const vec< pair< int, vec<int> > >& s1s2, const HyperBasevectorX& hb, 
@@ -1064,22 +1078,25 @@ template<class VP2, class VI, class VA, class VE> void Unvoid(
      if (SAVE_LOCAL) Mkdir777( DIR + "/a.local" );
 
      // Set up ancillary data structures.
-
      vec<Bool> internal( paths.size( ), False );
      vec<int> to_left, to_right, mult, lens;
      #pragma omp parallel sections
      {
           #pragma omp section
           {    D.ToLeft(to_left), D.ToRight(to_right);    }
+          // find multiplicity of each edge of hb in D
           #pragma omp section
           {    ComputeMult( hb, D, mult );    }
           #pragma omp section
-          {    lens.resize( D.E( ), 0 );
+          {    
+               // calculate super-edge lengths
+               lens.resize( D.E( ), 0 );
                #pragma omp parallel for
                for ( int e = 0; e < D.E( ); e++ )
                {    if ( D.O(e)[0] < 0 ) continue;
                     for ( int j = 0; j < D.O(e).isize( ); j++ )
                          lens[e] += hb.Kmers( D.O(e)[j] );    }    }    }
+     // store which line each superedge belongs to
      vec<int> tol( D.E( ), -1 );
      for ( int i = 0; i < dlines.isize( ); i++ )
      for ( int j = 0; j < dlines[i].isize( ); j++ )
@@ -1088,11 +1105,11 @@ template<class VP2, class VI, class VA, class VE> void Unvoid(
           tol[ dlines[i][j][k][l] ] = i;
 
      // Start main loop.
-
      cout << Date( ) << ": memory in use = " << MemUsageGBString( ) << endl;
      cout << Date( ) << ": looping over " << s1s2.size( ) 
           << " elements, showing 100 dots:" << endl;
      int ndots = 0, stopped = 0;
+     // for each line gap
      #pragma omp parallel for schedule( dynamic, 1 )
      for ( int i = 0; i < s1s2.isize( ); i++ )
      {    const int s1 = s1s2[i].first;
@@ -1203,7 +1220,7 @@ template<class VP2, class VI, class VA, class VE> void Unvoid(
           #pragma omp critical
           {    gout << mout.str( );
                clockb3 += WallClockTime( );
-               MakeDots( stopped, ndots, s1s2.size( ) );    }    }
+               MakeDots( stopped, ndots, s1s2.isize( ) );    }    }
 
      // Summarize.
 

@@ -49,7 +49,12 @@ String parsed_args::doc_format;    // paramter documentation format
 
 String parsed_args::GetCommitHash() const
 {
-     return SVN_REVISION;
+     return SW_COMMIT;
+}
+
+String parsed_args::GetRelease() const
+{
+     return SW_RELEASE;
 }
 
 void parsed_args::PrintTheCommandPretty( ostream& out, const String& prefix )
@@ -66,8 +71,8 @@ void parsed_args::PrintTheCommandPretty( ostream& out, const String& prefix )
   
   // Write the first line of the command header.
   out << prefix << "\n" << prefix << bar << "\n" << prefix
-      << Date( ) << " run on " << hostname << ", pid=" << pid_str
-      << " [" << LINK_TIMESTAMP << " " << SVN_REVISION << "]\n";
+      << Date( ) << " on " << hostname << ", pid=" << pid_str
+      << " [" << LINK_TIMESTAMP << " " << SW_COMMIT << "]\n";
   
   if ( orig_command_ != "" ) {
     String oc;
@@ -724,7 +729,7 @@ void parsed_args::SetOutputRedirection(const String filenames) {
 
 void parsed_args::PrintVersion()
 {
-  cout << command_ << " r" << SVN_REVISION << endl;
+  cout << command_ << " r" << SW_COMMIT << endl;
   return;
 }
 

@@ -27,6 +27,7 @@
 extern char const* OS_RELEASE;
 extern char const* ARACHNE_RELEASE;
 extern char const* LINK_TIMESTAMP;
-extern char const* SVN_REVISION;
+extern char const* SW_COMMIT;
+extern char const* SW_RELEASE;
 
 #endif /* LINKTIME_H_ */

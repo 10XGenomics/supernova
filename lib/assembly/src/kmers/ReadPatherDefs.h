@@ -928,8 +928,8 @@ void PathBuilder<K>::writeEvidence( unsigned nThreads )
 
 } // end of anonymous namespace
 
-template <unsigned K>
-void KmerDict<K>::process( VirtualMasterVec<bvec> const& reads,
+template <unsigned K, typename Bcode>
+void KmerDict<K,Bcode>::process( VirtualMasterVec<bvec> const& reads,
                             bool validate, unsigned nThreads, size_t batchSize )
 {
     size_t nReads = reads.size();
@@ -954,8 +954,8 @@ void KmerDict<K>::process( VirtualMasterVec<bvec> const& reads,
     }
 }
 
-template <unsigned K>
-void KmerDict<K>::process( vecbvec const& reads, bool verbose,
+template <unsigned K, typename Bcode>
+void KmerDict<K,Bcode>::process( vecbvec const& reads, bool verbose,
                             bool validate, unsigned nThreads, size_t batchSize )
 {
     size_t nReads = reads.size();

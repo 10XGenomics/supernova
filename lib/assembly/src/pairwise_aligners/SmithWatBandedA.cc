@@ -104,15 +104,14 @@ float SmithWatBandedA2( const basevector& S, const basevector& T, int offset,
 
      int jstart = Max( 0, -right-1 ), jstop = Min( N-1, n-left );
 
-     vec< vec<X> > from;
      int from_size = jstop - jstart + 1;
-     if ( (int) from.size( ) < from_size ) from.resize( from_size + from_size/5 );
-     for ( int i = 0; i < from_size; i++ )
-     {    from[i].resize( right - left + 3 );
-          unsigned int tempui = from[i].size();
-          for ( unsigned int j = 0; j < tempui; j++ )
-               from[i][j] = 'n';    }
-
+     vec<X> from( from_size * (right - left + 3), 'n' );
+     vec<int> fs(from_size); // from start
+     {    int fstart = 0;
+          for ( int i = 0; i < from_size; i++ )
+          {    fs[i] = fstart;
+               fstart += right - left + 3;    }    }
+     // old from[i][j] ==> from[ fs[i] + j ]
 
      // [i,j] to be stored at from[ j - jstart ][ i - left - j + 1 ]
 
@@ -135,11 +134,11 @@ float SmithWatBandedA2( const basevector& S, const basevector& T, int offset,
           #define SWMIN(I)                                                         \
                lastx = *xp;                                                        \
                if ( a <= b )                                                       \
-               {    if ( a <= c ) {from[j-jstart][I-left-j+1] = 'a'; *xp=a;}       \
-                    else {from[j-jstart][I-left-j+1] = 'c'; *xp=c;}    }           \
+               {    if ( a <= c ) {from[ fs[j-jstart] + I-left-j+1 ] = 'a'; *xp=a;}\
+                    else {from[ fs[j-jstart] + I-left-j+1 ] = 'c'; *xp=c;}    }    \
                else                                                                \
-               {    if ( b <= c ) {from[j-jstart][I-left-j+1] = 'b'; *xp=b;}       \
-                    else {from[j-jstart][I-left-j+1] = 'c'; *xp=c;}    }
+               {    if ( b <= c ) {from[ fs[j-jstart] + I-left-j+1 ] = 'b'; *xp=b;}\
+                    else {from[ fs[j-jstart] + I-left-j+1 ] = 'c'; *xp=c;}    }
 
           #define SWCORE(J)                                                        \
                else if ( T[j] == J )                                               \
@@ -224,23 +223,11 @@ float SmithWatBandedA2( const basevector& S, const basevector& T, int offset,
      gaps.resize(0);
      lengths.resize(0);
 
-     // int a_count = 0; // XXX
      while(1)
-     {    
-          if ( j < 0 || i < 0 || j-jstart < 0 || i-left-j+1 < 0 
+     {    if ( j < 0 || i < 0 || j-jstart < 0 || i-left-j+1 < 0 
                || i-left-j+1 >= right-left+3 ) 
                break;
-
-          /*
-          char letter = from[j-jstart][i-left-j+1]; // XXX
-          if ( letter == 'a' ) ++a_count; // XXX
-          else  // XXX
-          {    if ( a_count > 0 ) cout << " a^" << a_count << " "; // XXX
-               a_count = 0; // XXX
-               cout << letter;    } // XXX
-          */
-
-          if ( from[j-jstart][i-left-j+1] == 'a' )
+          if ( from[ fs[j-jstart] + i-left-j+1 ] == 'a' )
           {    if ( g1count > 0 )
                {    gaps.push_back( g1count );
                     lengths.push_back( last_length );
@@ -253,14 +240,14 @@ float SmithWatBandedA2( const basevector& S, const basevector& T, int offset,
                ++lcount;
                --i;
                --j;    }
-          else if ( from[j-jstart][i-left-j+1] == 'b' )  // gap on long sequence
+          else if ( from[ fs[j-jstart] + i-left-j+1 ] == 'b' ) // gap on long seq
           {    if ( lcount > 0 )
                {    last_length = lcount;
                     lcount = 0;    }
                ForceAssert( g1count == 0 );
                ++g2count;
                --i;    }
-          else if ( from[j-jstart][i-left-j+1] == 'c' )  // gap on short sequence
+          else if ( from[ fs[j-jstart] + i-left-j+1 ] == 'c' ) // gap on short seq
           {    if ( lcount > 0 )
                {    last_length = lcount;
                     lcount = 0;    }
@@ -269,21 +256,12 @@ float SmithWatBandedA2( const basevector& S, const basevector& T, int offset,
                if ( j == 0 ) break; // NEW NEW NEW !!!
                --j;    }
           else break;    }
-          // if ( i < 1 ) break;
-          // ForceAssert( j >= 0 );    }
-     // if ( a_count > 0 ) cout << " a^" << a_count << " "; // XXX
-     // cout << "\n"; // XXX
  
-     // ForceAssert( g1count == 0 );
-     // ForceAssert( g2count == 0 );
-     // gaps.push_back(0);
-
      if ( g1count != 0 ) gaps.push_back( g1count );
      else if ( g2count != 0 ) gaps.push_back( -g2count );
      else gaps.push_back(0);
 
      lengths.push_back( lcount + 1 );
-     // lengths.push_back(lcount);
 
      int pos1 = i, pos2 = j;
      if ( pos1 < 0 || pos2 < 0 )
@@ -396,17 +374,11 @@ float SmithWatBandedAEngine::run2A( const basevector& S, const basevector& T, in
 
      int n = (int) S.size( ), N = (int) T.size( );
 
-//     vec<char> s;
-//     s.resize(n);
-//     for ( int i = 0; i < n; i++ )
-//          s[i] = S[i];
      m_s.resize(n);
      for ( int i = 0; i < n; i++ )
           m_s[i] = S[i];
      int best_score = Infinity;
      int best_j = 0, best_i = 0;
-//     vec<int> x;
-//     x.resize(n+1);
      m_x.resize(n+1);
      int istart = 0, istop = 0;
 
@@ -416,14 +388,7 @@ float SmithWatBandedAEngine::run2A( const basevector& S, const basevector& T, in
 
      int jstart = Max( 0, -right-1 ), jstop = Min( N-1, n-left );
 
-//     vec< vec<unsigned char> > from;
      int from_size = jstop - jstart + 1;
-//   if ( (int) from.size( ) < from_size ) from.resize( from_size + from_size/5 );
-//   for ( int i = 0; i < from_size; i++ )
-//   {    from[i].resize( right - left + 3 );
-//        unsigned int tempui = from[i].size();
-//        for ( unsigned int j = 0; j < tempui; j++ )
-//             from[i][j] = 'n';    }
 
      m_from.reset( from_size + from_size/5 , right-left+3 ,'n');
 
@@ -519,13 +484,8 @@ float SmithWatBandedAEngine::run2A( const basevector& S, const basevector& T, in
      for ( int i = istart; i <= istop; i++ )
      {    if ( m_x[i] < best_score )
           {
-               // cout << "type 2 set\n"; // XXX
-               // PRINT3( i, istart, istop ); // XXX
-               // PRINT( x[i] ); // XXX
                best_j = jstop;
                best_i = i - 1;     // NEW NEW NEW NEW NEW NEW!!!!!
-               // best_i = i;
-               // PRINT2( best_i, best_j ); // XXX
                     }
           best_score = Min( m_x[i], best_score );    }
 
@@ -538,21 +498,11 @@ float SmithWatBandedAEngine::run2A( const basevector& S, const basevector& T, in
      gaps.resize(0);
      lengths.resize(0);
 
-     // int a_count = 0; // XXX
      while(1)
      {
           if ( j < 0 || i < 0 || j-jstart < 0 || i-left-j+1 < 0
                || i-left-j+1 >= right-left+3 )
                break;
-
-          /*
-          char letter = from[j-jstart][i-left-j+1]; // XXX
-          if ( letter == 'a' ) ++a_count; // XXX
-          else  // XXX
-          {    if ( a_count > 0 ) cout << " a^" << a_count << " "; // XXX
-               a_count = 0; // XXX
-               cout << letter;    } // XXX
-          */
 
           if ( m_from(j-jstart,i-left-j+1) == 'a' )
           {    if ( g1count > 0 )
@@ -583,21 +533,12 @@ float SmithWatBandedAEngine::run2A( const basevector& S, const basevector& T, in
                if ( j == 0 ) break; // NEW NEW NEW !!!
                --j;    }
           else break;    }
-          // if ( i < 1 ) break;
-          // ForceAssert( j >= 0 );    }
-     // if ( a_count > 0 ) cout << " a^" << a_count << " "; // XXX
-     // cout << "\n"; // XXX
-
-     // ForceAssert( g1count == 0 );
-     // ForceAssert( g2count == 0 );
-     // gaps.push_back(0);
 
      if ( g1count != 0 ) gaps.push_back( g1count );
      else if ( g2count != 0 ) gaps.push_back( -g2count );
      else gaps.push_back(0);
 
      lengths.push_back( lcount + 1 );
-     // lengths.push_back(lcount);
 
      int pos1 = i, pos2 = j;
      if ( pos1 < 0 || pos2 < 0 )

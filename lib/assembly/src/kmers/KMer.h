@@ -28,7 +28,7 @@
 #include <ostream>
 
 // S must be some type of unsigned integer
-template <unsigned K, class S = unsigned long>
+template <unsigned K, class S = unsigned int> 
 class KMer
 {
 public:

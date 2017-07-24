@@ -15,7 +15,7 @@
 #include "feudal/SubsetMasterVec.h"
 
 void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
-     MasterVec<ReadPath>& paths, String pi_file,
+     const ReadPathVecX & pathsX, String pi_file,
      const vec<Bool>& bad, vec< pair<int,int> >& pairs, 
      const vec<DataSet>& datasets, const vec<int32_t>& bc, const Bool one_good )
 {    
@@ -26,26 +26,6 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
      // read in paths_index in batches to save memory
      const int batch = 100000;
      
-     // Create a vector of integers, one for each read, such that "having two"
-     // is enough.  Note that the way we're treating barcode zero doesn't 
-     // necessarily make sense.
-
-     vec<int64_t> bid( paths.size( ) );
-     #pragma omp parallel for
-     for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
-     {    int di;
-          for ( di = 0; di < datasets.isize( ); di++ )
-               if ( id < datasets[di].start ) break;
-          const ReadDataType& dtype = datasets[di-1].dt;
-          if ( dtype == ReadDataType::BAR_10X ) 
-               bid[id] = (int64_t) paths.size( ) + bc[id];
-          else if ( dtype == ReadDataType::UNBAR_10X ) bid[id] = paths.size( );
-          else if ( dtype == ReadDataType::PCR_FREE ) bid[id] = id;
-
-          // Probably not what we want:
-
-          else if ( dtype == ReadDataType::PCR ) bid[id] = id;    }
-
      // Heuristics.
 
      const int MAX_DIST_TO_END = 120;
@@ -77,17 +57,20 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
           vec< pair<int,int> > e2s;
           ULongVec & pi = paths_index_part[e1-start];
           for ( int i = 0; i < (int) pi.size( ); i++ )
-          {    int64_t id1 = pi[i];
-               const ReadPath& p1 = paths[id1];
+          {    const int64_t id1 = pi[i];
+               const int64_t bid1 = bidc( datasets, bc, id1 );
+               ReadPath p1;
+               pathsX.unzip( p1, hb, id1 );
                Bool found = False;
                for ( int j = 0; j < (int) p1.size( ); j++ )
                     if ( p1[j] == e1 ) found = True;
                if (found)
                {    int64_t id2 = ( id1 % 2 == 0 ? id1+1 : id1-1 );
-                    const ReadPath& p2 = paths[id2];
+                    ReadPath p2;
+                    pathsX.unzip( p2, hb, id2 );
                     if ( p2.size( ) > 0 )
                     {    int e2 = inv[ p2.back( ) ];
-                         if ( e2 != e1 ) e2s.push( e2, bid[id1] );    }    }    }
+                         if ( e2 != e1 ) e2s.push( e2, bid1 );    }    }    }
           UniqueSort(e2s);
           for ( int i = 0; i < e2s.isize( ); i++ )
           {    int j;
@@ -155,17 +138,20 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
           vec< pair<int,int> > e2s;
           ULongVec & pi = paths_index_part[e1-start];
           for ( int i = 0; i < (int) pi.size( ); i++ )
-          {    int64_t id1 = pi[i];
-               const ReadPath& p1 = paths[id1];
+          {    const int64_t id1 = pi[i];
+               const int64_t bid1 = bidc( datasets, bc, id1 );
+               ReadPath p1;
+               pathsX.unzip( p1, hb, id1 );
                Bool found = False;
                for ( int j = 0; j < (int) p1.size( ); j++ )
                     if ( p1[j] == e1 ) found = True;
                if (found)
                {    int64_t id2 = ( id1 % 2 == 0 ? id1+1 : id1-1 );
-                    const ReadPath& p2 = paths[id2];
+                    ReadPath p2;
+                    pathsX.unzip( p2, hb, id2 );
                     if ( p2.size( ) > 0 )
                     {    int e2 = inv[ p2.back( ) ];
-                         if ( e2 != e1 ) e2s.push( e2, bid[id1] );    }    }    }
+                         if ( e2 != e1 ) e2s.push( e2, bid1 );    }    }    }
           UniqueSort(e2s);
           for ( int i = 0; i < e2s.isize( ); i++ )
           {    int j;
@@ -216,9 +202,11 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
           }
           for ( int i = 0; i < (int) pi_e.size( ); i++ )
           {    int64_t id1 = pi_e[i];
+               const int64_t bid1 = bidc( datasets, bc, id1 );
                // if ( dup[id1/2] || bad[id1/2] ) continue;
-               bs.push_back( bid[id1] );
-               const ReadPath& p1 = paths[id1];
+               bs.push_back( bid1 );
+               ReadPath p1;
+               pathsX.unzip( p1, hb, id1 );
                for ( int j = 0; j < (int) p1.size( ); j++ )
                {    if ( p1[j] == e )
                     {    vec<int> x;
@@ -226,7 +214,8 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
                               x.push_back( p1[l] );
                          X.push_back(x);    }    }
                int64_t id2 = ( id1 % 2 == 0 ? id1+1 : id1-1 );
-               const ReadPath& p2 = paths[id2];
+               ReadPath p2;
+               pathsX.unzip( p2, hb, id2 );
                if ( p2.size( ) > 0 )
                {    vec<int> x;
                     for ( int l = (int) p2.size( ) - 1; l >= 0; l-- )
@@ -234,9 +223,11 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
                     X.push_back(x);    }    }
           for ( int i = 0; i < (int) pi_re.size( ); i++ )
           {    int64_t id = pi_re[i];
-               bs.push_back( bid[id] );
+               const int64_t bid = bidc( datasets, bc, id );
+               bs.push_back( bid );
                // if ( dup[id/2] || bad[id/2] ) continue;
-               const ReadPath& p = paths[id];
+               ReadPath p;
+               pathsX.unzip( p, hb, id );
                for ( int j = 0; j < (int) p.size( ); j++ )
                {    if ( p[j] == re )
                     {    vec<int> x;
@@ -298,8 +289,10 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
                     vec< pair<int,int64_t> > can;
                     for ( int i = 0; i < (int) pi_e.size( ); i++ )
                     {    int64_t id1 = pi_e[i];
+                         const int64_t bid1 = bidc( datasets, bc, id1 );
                          if ( bad[id1/2] ) continue;
-                         const ReadPath& p1 = paths[id1];
+                         ReadPath p1;
+                         pathsX.unzip( p1, hb, id1 );
                          for ( int j = 0; j < (int) p1.size( ); j++ )
                          {    if ( p1[j] == e )
                               {    for ( int l = j+1; l < (int) p1.size( ); l++ )
@@ -309,17 +302,20 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
                                         {    too_easy.push_back(f);    }    }    }
                                                   }
                          int64_t id2 = ( id1 % 2 == 0 ? id1+1 : id1-1 );
-                         const ReadPath& p2 = paths[id2];
+                         ReadPath p2;
+                         pathsX.unzip( p2, hb, id2 );
                          if ( p2.size( ) > 0 )
                          {    for ( int l = (int) p2.size( ) - 1; l >= 0; l-- )
                               {    int f = inv[ p2[l] ];
                                    if ( hb.Kmers(f) >= MIN_RIGHT 
                                         && f != e && f != inv[e] )
-                                   {    can.push( f, bid[id1] );    }    }    }    }
+                                   {    can.push( f, bid1 );    }    }    }    }
                     for ( int i = 0; i < (int) pi_re.size( ); i++ )
                     {    int64_t id = pi_re[i];
+                         const int64_t bid = bidc( datasets, bc, id );
                          if ( bad[id/2] ) continue;
-                         const ReadPath& p = paths[id];
+                         ReadPath p;
+                         pathsX.unzip( p, hb, id );
                          for ( int j = 0; j < (int) p.size( ); j++ )
                          {    if ( p[j] == re )
                               {    for ( int l = j; l >= 0; l-- )
@@ -327,7 +323,7 @@ void FindEdgePairs( const HyperBasevectorX& hb, const vec<int>& inv,
                                         if ( hb.Kmers(f) >= MIN_RIGHT 
                                              && f != e && f != inv[e] )
                                         {    can.push( f, 
-                                                  bid[id] );    }    }    }    }    }
+                                                  bid );    }    }    }    }    }
                     UniqueSort(too_easy), UniqueSort(can);
                     for ( int i = 0; i < can.isize( ); i++ )
                     {    int j;

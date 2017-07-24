@@ -17,13 +17,36 @@
 #include "10X/DfTools.h"
 #include "10X/Gap.h"
 #include "10X/Heuristics.h"
+#include "10X/LineLine.h"
 #include "10X/Super.h"
 #include "10X/astats/AlignFin.h"
-#include "10X/astats/LineLine.h"
 #include "10X/astats/MeasureGaps.h"
 #include "10X/astats/Misassembly.h"
 #include "10X/astats/View.h"
 #include "10X/MakeHist.h"
+#include "10X/MakeLocalsTools.h"
+
+template <class E>
+String PrettyFormat( E value, const String unit="", const int MAX_EXP=9 )
+{
+     double x = value;
+     map<int,String> suffix;
+     suffix[0] = " ";
+     suffix[3] = "K";
+     suffix[6] = "M";
+     suffix[9] = "G";
+     double y = x;
+     int s = 0;
+     while ( y > 1000 && s < MAX_EXP ) {
+          y/=1000;
+          s += 3;
+     }
+     ostringstream out;
+     out << fixed << setprecision(2) << setw(7) << right << y
+         << " " << suffix[s] << (unit.empty() ? String(" ") : unit);
+     
+     return String(out.str());
+}
 
 template<class T>
 void EraseIf( SerfVec<T>& v, const vec<Bool>& to_delete )
@@ -36,11 +59,8 @@ void ReportAssemblyStats( const vec<int64_t>& bci, const vecbasevector& genome,
      const vec< pair<int,ho_interval> >& ambint, const HyperBasevectorX& hb,
      const vec<int>& inv, digraphE<vec<int>> D, vec<int> dinv,
      const vec<vec<vec<vec<int>>>>& dlines, 
-     const ReadPathVec& dpaths, const vec<double>& COV, 
      MasterVec< SerfVec<triple<int,int,int> > >& alignsb, const vecbasevector& G, 
-     double & r2_pct_proper, ostream& out, 
-     const String& DIR, const String& WRITE_SUB,
-     const String& CS_SAMPLE_ID, const String& CS_SAMPLE_DESC )
+     ostream& out, const String& DIR, const String& OUTDIR )
 {
      // Get checksum.
 
@@ -90,7 +110,6 @@ void ReportAssemblyStats( const vec<int64_t>& bci, const vecbasevector& genome,
           return out.str( );    };
      int64_t genome_size = 0, cap_gap_total = 0, cov_total = 0;
      int64_t contig_line_N50 = 0, pairtig_N50 = 0;
-     String OUTDIR = DIR + "/" + "final" + WRITE_SUB;
 
      // Find lines of lines.
 
@@ -508,9 +527,10 @@ void ReportAssemblyStats( const vec<int64_t>& bci, const vecbasevector& genome,
           "final", False );
 
      // Compute N50 perfect stretch.
-
+     
      int64_t N50_perf = -1;
      double errw = -1;
+     cout << Date( ) << ": G has size " << G.size( ) << endl;
      if ( G.size( ) > 0 )
      {    MasterVec< SerfVec<triple<int,int,int> > > galignsb;
           galignsb.ReadAll( DIR + "/a.fin.alignsb" );
@@ -518,8 +538,22 @@ void ReportAssemblyStats( const vec<int64_t>& bci, const vecbasevector& genome,
           String report;
           AlignFin( hb, inv, D, dinv, dlines, G, galignsb,
                Matches, errw, N50_perf, report, True );
-          Ofstream( rout, OUTDIR + "/o.report" );
-          rout << report;    }
+          Ofstream( rout, OUTDIR + "/stats/o.report" );
+          rout << report;
+     
+          StatLogger::log("perf_N50", N50_perf, "N50 perfect stretch size" );
+          // Important: the error rate must be multiplied by 1000
+          // since it is measured per kb
+          StatLogger::log("weighted_error_rate", 1000.0*errw, "weighted error rate" );
+     }
+     
+     // Finished Sequence Evaluation
+     
+     if ( !G.empty() )
+     {
+          vec<int> fin (G.size(), vec<int>::IDENTITY);
+          EvalVersusFinished( hb, inv, D, dinv, "all", fin, DIR, OUTDIR, False );
+     }
 
      // Reinsert loops.
 
@@ -539,6 +573,107 @@ void ReportAssemblyStats( const vec<int64_t>& bci, const vecbasevector& genome,
      ComputeAndWriteHist( lens, 1000, OUTDIR+"/stats", "edge",
           "final", False );
 
+     // Find the barcode distribution histogram
+     {
+          vec<int64_t> sizes;
+          for ( int i = 1; i < bci.isize( ) - 1; i++ )
+          {    int n = bci[i+1] - bci[i];
+               if ( n > 0 ) sizes.push_back(n);    }
+          Sort(sizes);
+          
+          ComputeAndWriteHist( sizes, int64_t(10), OUTDIR+"/stats",
+               "reads_per_barcode", "final", False );
+     }
+     
+     // ============================================================================
+     // Log all the output stats
+     // ============================================================================
+
+     StatLogger::log( "scaffolds_1kb_plus", nlines0/2, "scaffolds >= 1 kb", true);
+     StatLogger::log( "scaffolds_10kb_plus", nlines/2, "scaffolds >= 10 kb", true);
+
+     // Log edge N50.
+
+     StatLogger::log( "edge_N50", N50_edge, "N50 edge length", true);
+
+     // Log contig N50.
+
+     StatLogger::log( "contig_N50", contig_line_N50, "N50 contig length", true);
+
+     // Log phase block N50.
+
+     StatLogger::log( "phase_block_N50", phasetig_N50, "N50 phase block length", true);
+
+     // Log scaffold N50 and N60.  Treated differently.
+
+     StatLogger::log( 
+          "scaffold_N50", scaffold_N50, "N50 scaffold length", true);
+     StatLogger::log( 
+          "scaffold_N60", scaffold_N60, "N60 scaffold length" );
+
+     // Log approximate genome size.
+
+     StatLogger::log( 
+          "assembly_size", est_genome_size, "Assembly size", true);
+     
+     // Log misassembly stats.
+
+     if ( genome.size( ) > 0 ) {    
+          // If we have no data to evaluate these error percentages
+          // we set them to 100 %
+          // misasm_perc is the sum of individual error percents (when not 100%)
+          // if we have no info at all then misasm_perc is 100%
+          double dis_err_perc = 100.0, ori_err_perc = 100.0, ord_err_perc = 100.0;
+          double mis = 0.0;
+          bool no_mis_data = true;
+          //
+          if ( total_err_dis_den > 0 ) {
+               dis_err_perc = 100.0*total_err_dis_num/total_err_dis_den;
+               mis += double(total_err_dis_num)/double(total_err_dis_den);
+               no_mis_data = false;
+          } 
+          StatLogger::log( "dis_err_perc",
+               dis_err_perc,
+               "pct of assembly in distant misjoin" );
+          //
+          if ( total_err_ori_den > 0 ) {
+               ori_err_perc = 100.0*total_err_ori_num / total_err_ori_den;
+               mis += double(total_err_ori_num)/double(total_err_ori_den);
+               no_mis_data = false;
+          }
+          StatLogger::log( "ori_err_perc",
+               ori_err_perc,
+               "pct of assembly having wrong orientation" );
+          //
+          if ( total_err_ord_den > 0 ) {
+               ord_err_perc = 100.0*total_err_ord_num/total_err_ord_den;
+               mis += double(total_err_ord_num)/double(total_err_ord_den);
+               no_mis_data = false;
+          }
+          StatLogger::log( "ord_err_perc",
+               ord_err_perc,
+               "pct of assembly out of order" );
+          // if we have no data on mis assemblies then set error to 100% 
+          if (no_mis_data)
+               mis = 1.0;
+          StatLogger::log( "misasm_perc", mis*100, "Misassembled pct" );
+     }
+
+     // Log gap stats.
+
+     if ( genome.size( ) > 0 ){
+          cap_frac = cap_gap_total / double(genome_size);
+          StatLogger::log( "air_err_perc", 100*cap_frac,
+                    "pct of assembly in captured gaps");
+          
+          double uncap_frac = (genome_size-cov_total) / double(genome_size);
+          StatLogger::log( "vac_err_perc",
+                    100*uncap_frac, "pct of assembly in uncaptured gaps");
+          
+          StatLogger::log("total_gap_perc",
+                    (cap_frac+uncap_frac)*100, "Total gap pct");
+     }
+
 
      // Define some printing functions.
 
@@ -557,305 +692,177 @@ void ReportAssemblyStats( const vec<int64_t>& bci, const vecbasevector& genome,
      // Print final report.
      // ============================================================================
 
-     char cwd[10000];
-     getcwd(cwd,10000);
-     String cwds(cwd);
-     cwds = cwds.RevBefore( "/" );
-     cwds = cwds.RevAfter( "/" );
+     // Print sample id and sample description
+     // if there's no sample id, then just print DIR/../
+
+     String asmdir = LineOfOutput("readlink -f " + DIR + "/../", true, true );
+     asmdir = asmdir.RevAfter( "/" );
      out << "\n";
      hline( );
      out << "SUMMARY" << endl;
      hline( );
      out << "- " << Date( ) << endl;
-     if ( CS_SAMPLE_ID == "" ) {
-          StatLogger::log( "sample_id", cwds, "pipeline sample id", true);
-          out << "- [" << cwds << "]";
-     } else {
-          StatLogger::log( "sample_id", CS_SAMPLE_ID, "pipeline sample id", true);
-          out << "- [" << CS_SAMPLE_ID << "]";
-     }
-     if ( CS_SAMPLE_DESC != "" ) out << "  " << CS_SAMPLE_DESC << endl;
-     if ( WRITE_SUB != "" ) out << "- SUB = " << WRITE_SUB.After( ":" ) << endl;
+     String CS_SAMPLE_ID = StatLogger::getStringStat( "CS_SAMPLE_ID", "" );
+     String CS_SAMPLE_DESC = StatLogger::getStringStat( "CS_SAMPLE_DESC", "" );
+
+     out << "- [" << (CS_SAMPLE_ID.empty() ? asmdir : CS_SAMPLE_ID)  << "]";
+     out << "  " << CS_SAMPLE_DESC << endl;
+     
+     //if ( WRITE_SUB != "" ) out << "- SUB = " << WRITE_SUB.After( ":" ) << endl;
+     
      // Print the code commit hash
-     if ( IsRegularFile( DIR+"/../.commit_hash" ) ) {
-          ifstream in_file ( DIR+"/../.commit_hash" );
-          String commit_hash="";
-          in_file >> commit_hash;
-          StatLogger::log( "commit_hash", commit_hash, 
-               "git commit hash" );
-          out << "- commit hash = " << commit_hash << endl;
-     }
+     
+     String commit_hash = StatLogger::getStringStat( "commit_hash", "" );
+     String software_release = StatLogger::getStringStat("software_release","");
+#ifdef CS
+     out << "- software release = " << software_release << "(" << commit_hash << ")" << endl;
+#else
+     out << "- software release = " << software_release << endl;
+     out << "- commit hash = " << commit_hash << endl;
+#endif
+     
+     // Print final assembly checksum
+
      StatLogger::log( "checksum", checksum, "Assembly checksum", true);
      out << "- assembly checksum = " << ToStringAddCommas(checksum) << endl;
-
-     // ============================================================================
-     // Print input stats.
-     // ============================================================================
-
-     hline( );
-     out << "INPUT" << endl;
-
-     // Print total reads.
-
-     int64_t nreads 
-          = MastervecFileObjectCount( DIR + "/../data/frag_reads_orig.fastb" );
-     out << "- " << rat(nreads,1000000) << " M   = READS"
-          << "          = number of reads; ideal 800-1200 for human" <<  endl;
-     StatLogger::log( "nreads", nreads, "number of reads", true);
-
-     // Print read length.
-
-     {    vec<int16_t> lens;
-          BinaryReader::readFile( DIR + "/../data/frag_reads_orig.lens", &lens );
-          int64_t nbases = 0;
-          for ( auto x : lens ) nbases += x;
-          int bases_per_read = nbases / lens.size( );
-          out << "- " << rat(bases_per_read,1) << " b   = MEAN READ LEN"
-               << "  = mean read length after trimming; ideal 140" <<  endl;
-          StatLogger::log( 
-               "bases_per_read", bases_per_read, "mean bases per read", true);    }
-
-     // Print qual score stat.
-
-     // test line temporary:
-     if ( IsRegularFile( DIR + "/../data/frag_reads_orig.qhist" ) )
-     {    vec<vec<vec< int64_t >>> qhist;
-          BinaryReader::readFile( 
-               DIR + "/../data/frag_reads_orig.qhist", &qhist );
-          double total = 0, total30 = 0;
-          int max_read_length = qhist[0].size();
-          int max_qual        = qhist[0][0].size();
-          for ( int pos = 0; pos < max_read_length; pos++ ) {
-               for ( int qv = 0; qv != max_qual; qv++ ) {    
-                    total += qhist[1][pos][qv];
-                    if ( qv >= 30 ) total30 += qhist[1][pos][qv];    }
-          }
-          double per_Q30_R2 = 100.0 * double(total30) / double(total);
-          out << "- " << rat(per_Q30_R2,1) << " %   = READ TWO Q30"
-               << "   = fraction of Q30 bases in read 2; ideal 75-85" <<  endl;
-          }
-
-     // Print insert size.
-
-     vec<int64_t> icount;
-     BinaryReader::readFile( DIR + "/a.ins_dist", &icount );
-     int64_t NI = Sum(icount), isum = 0;
-     int m;
-     for ( m = 0; m < icount.isize( ); m++ )
-     {    isum += icount[m];
-          if ( isum >= NI/2 ) break;    }
-     out << "- " << rat(m,1000) << " kb  = MEDIAN INSERT"
-          << "  = median insert size; ideal 0.35-0.40" <<  endl;
-     StatLogger::log( "median_ins_sz", m, "median insert size", true );
-
-     // Print insert behavior stat.
-
-     if ( r2_pct_proper > 0 ) {
-          out << "- " << rat(r2_pct_proper,1) << " %   = PROPER PAIRS"
-               << "   = fraction of proper read pairs; ideal >=75" <<  endl;
-          // Don't need to log below because it's already logged in CP
-          //StatLogger::log( 
-          //     "r2_pct_proper", r2_pct_proper, "read two % proper", true );
+     
+     //---------------------------------------------------------------------------------
+     // Automated printing of stats
+     //---------------------------------------------------------------------------------
+     
+     // To add a stat to output
+     // add a row with
+     // internal stat name, display name, description, units, max exponent suffix
+     // For example,
+     // {"nreads", "READS","number of reads; ideal 800M-1200M for human", "", "6"},
+     // "6" means the highest suffix will be M (not G), empty => 9
+     // unit is a one character unit, like b for bases, or % for percent, default:<space>
+     // this line will produce the output:
+     //
+     // - 1200.00 M   = READS          = number of reads; ideal 800-1200 for human
+     // 
+     // if you get the internal stat name wrong, then you will get a message 
+     // on the stdout that the stat could not be found. For example:
+     // 
+     // Fri Dec 16 18:19:56 2016: could not find a value for nreads
+     //
+     vec<vec<String>> display={{"INPUT", "", "", "", ""},
+{"nreads", "READS","number of reads; ideal 800M-1200M for human", "", "6"},
+{"bases_per_read", "MEAN READ LEN","mean read length after trimming; ideal 140", "b", ""},
+{"effective_coverage", "EFFECTIVE COV","effective read coverage; ideal ~42 for nominal 56x cov", "x", ""},
+{"q30_r2_perc", "READ TWO Q30","fraction of Q30 bases in read 2; ideal 75-85", "%", ""},
+{"median_ins_sz", "MEDIAN INSERT","median insert size; ideal 0.35-0.40", "b", ""},
+{"proper_pairs_perc", "PROPER PAIRS","fraction of proper read pairs; ideal >= 75", "%", ""},
+{"lw_mean_mol_len", "MOLECULE LEN","weighted mean molecule size; ideal 50-100", "b", ""},
+{"hetdist", "HETDIST","mean distance between heterozygous SNPs", "b", ""},
+{"unbar_perc", "UNBAR","fraction of reads that are not barcoded", "%", ""},
+{"rpb_N50", "BARCODE N50","N50 reads per barcode", "", ""},
+{"dup_perc", "DUPS","fraction of reads that are duplicates", "%", ""},
+{"placed_perc", "PHASED","nonduplicate and phased reads; ideal 45-50", "%", ""},
+{"OUTPUT", "", "", "", ""},
+{"scaffolds_10kb_plus", "LONG SCAFFOLDS","number of scaffolds >= 10 kb", "", "" },
+{"edge_N50", "EDGE N50","N50 edge size", "b", ""},
+{"contig_N50", "CONTIG N50","N50 contig size", "b", ""},
+{"phase_block_N50", "PHASEBLOCK N50","N50 phase block size", "b", ""},
+{"scaffold_N50", "SCAFFOLD N50","N50 scaffold size", "b", ""},
+{"scaffold_N60", "SCAFFOLD N60","N60 scaffold size", "b", ""},
+{"assembly_size", "ASSEMBLY SIZE","assembly size (only scaffolds >= 10 kb)", "b", ""}};
+     
+     // These statistics are only computed if a reference genome
+     // is supplied
+     // currently: human
+     if ( genome.size() > 0 ) {
+          display.append(vec<vec<String>>{
+{"dis_err_perc", "dis error","fraction of assembly in distant misjoin", "%", ""},
+{"ori_err_perc","ori error","fraction of assembly having wrong orientation", "%", ""},
+{"ord_err_perc","ord error","fraction of assembly out of order", "%", ""},
+{"misasm_perc", "MISASSEMBLED", "total mis-assembly fraction", "%", ""},
+{"air_err_perc", "air error","fraction of assembly in captured gaps", "%", ""},
+{"vac_err_perc", "vac error","fraction of assembly in uncaptured gaps", "%", ""},
+{"total_gap_perc", "GAP", "total fraction of assembly in gaps", "%", ""}});
      }
 
-     // Print molecule length.
-
-     double mol_lwml = StatLogger::getNumStat ("lw_mean_mol_len");
-     out << "- " << rat(mol_lwml,1000) << " kb  = MOLECULE LEN"
-          << "   = weighted mean molecule size; ideal 50-100" <<  endl;
-
-     // Print estimated heterozygosity rate.
-
-     if ( IsRegularFile( DIR + "/final" + WRITE_SUB + "/stats/s.hetdist" ) ) // temp
-     {    int hetdist;
-          BinaryReader::readFile( DIR + "/final" + WRITE_SUB + "/stats/s.hetdist",
-               &hetdist );
-          out << "- " << rat(hetdist,1000) << " kb  = HETDIST"
-               << "        = mean distance between heterozygous SNPs" << endl;
-          StatLogger::log( "hetdist", hetdist, 
-               "mean distance between heterozygous SNPs", true );    }
-
-     // Print barcode stats.
-
-     out << "- " << rat( 100 * bci[1], bci.back( ) ) << " %   = UNBAR"
-          << "          = fraction of reads that are not barcoded\n";
-     vec<int64_t> sizes;
-     for ( int i = 1; i < bci.isize( ) - 1; i++ )
-     {    int n = bci[i+1] - bci[i];
-          if ( n > 0 ) sizes.push_back(n);    }
-     Sort(sizes);
-     out << "- " << rat( N50(sizes), 1 ) << "     = BARCODE N50"
-          << "    = N50 reads per barcode" << endl;
-     ComputeAndWriteHist( sizes, int64_t(10), OUTDIR+"/stats",
-          "reads_per_barcode", "final", False );
-
-     // Print dup rate
-     double dup_perc = StatLogger::getNumStat( "dup_perc", 0.0 );
-     out << "- " << rat( dup_perc, 1 ) << " %   = DUPS"
-          << "           = fraction of reads that are duplicates\n";
-     // Print read placement.
-
-     int64_t placed = 0;
-     for ( int64_t id = 0; id < (int64_t) dpaths.size( ); id++ )
-          if ( dpaths[id].size( ) > 0 ) placed++;
-     out << "- " << per(placed,dpaths.size( )) << " %   = PHASED"
-          << "         = nonduplicate and phased reads; ideal 45-50" << endl;
-     StatLogger::log( "placed_frac", double(placed)/double(dpaths.size( )),
-          "nonduplicate and phased reads", true );
-
-     // ============================================================================
-     // Print output stats.
-     // ============================================================================
-
-     hline( );
-     out << "OUTPUT" << endl;
-     // out << "- total constituent edges = " << ToStringAddCommas(total_edges)
-     //      << endl;
-     // StatLogger::log( "min_line", MIN_LINE, "minimum line" );
-     // out << "- minimum line = " << MIN_LINE << endl;
-
-     // Print scaffold count.
-
-     StatLogger::log( "scaffolds_1kb_plus", nlines0/2, "scaffolds >= 1 kb", true);
-     // out << "- " << rat(nlines/2,1000) << " K   = SCAFFOLDS"
-     //      << "      = number of scaffolds >= 1 kb" <<  endl;
-     StatLogger::log( "scaffolds_10kb_plus", nlines/2, "scaffolds >= 10 kb", true);
-     out << "- " << rat(nlines/2,1000) << " K   = LONG SCAFFOLDS"
-          << " = number of scaffolds >= 10 kb" <<  endl;
-
-     // Print N50 perfect stretch.
-
-     if ( N50_perf >= 0 )
-     {    StatLogger::log( "perf_N50", N50_perf, "N50 perfect stretch" );
-          out << "- " << rat(N50_perf,1000) << " kb  = PERFECT N50"
-               << "    = N50 perfect stretch size" <<  endl;    }
-
-     // Print weighted error rate.
-
-     if ( N50_perf >= 0 )
-     {    if ( !std::isnan(errw) )
-          {    double errwf = int( round( ( errw*1000 ) * 100 ) ) / 100.0;
-               StatLogger::log( "weighted_error_rate", errwf, "Error rate /kb");
-               out << "- " << rat(errwf,1) << " /kb = ERROR RATE"
-                    << "     = weighted error rate" <<  endl;    }    }
-
-     // Print edge N50.
-
-     out << "- " << rat(N50_edge,1000) << " kb  = EDGE N50" 
-          << "       = N50 edge size" <<  endl;
-     StatLogger::log( "edge_N50", N50_edge, "N50 edge length", true);
-
-     // Print contig N50.
-
-     out << "- " << rat(contig_line_N50,1000) << " kb  = CONTIG N50" 
-          << "     = N50 contig size" <<  endl;
-     StatLogger::log( "contig_N50", contig_line_N50, "N50 contig length", true);
-
-     // Print phase block N50.
-
-     out << "- " << rat(phasetig_N50,1000000) << " Mb  = PHASEBLOCK N50"
-          << " = N50 phase block size" << endl;
-     StatLogger::log( "phase_block_N50", phasetig_N50, "N50 phase block length", true);
-
-     // Print scaffold N50 and N60.  Treated differently.
-
+     // These statistics are computed only when finished
+     // sequence is available
+     // currently: NA12878, HGP, CHM.
+     if ( G.size() > 0 ) {
+          display.append(vec<vec<String>>{
+{"FINISHED SEQUENCE EVALUATION", "", "", "", ""},
+{"perf_N50", "PERFECT N50", "N50 perfect stretch size", "b", ""},
+{"weighted_error_rate", "ERROR RATE", "weighted error rate per kb", "", ""},
+{"tot_edges", "FIN EDGES","number of edges containing finished sequence", "", ""},
+{"tot_lines", "FIN LINES","number of lines containing finished sequence", "", ""},
+{"tot_uncap", "UNCAPS","number of uncaptured gaps", "", ""},
+{"tot_cap", "CAPS","number of captured gaps", "", ""},
+{"tot_cov_perc", "FIN COV%","% of finished sequence covered", "%", ""},
+{"tot_errs", "FIN ERRORS","number of errors vs finished sequence", "", ""}});
+     }
+     // Should we display CS stats only?
+     // by default false, but is overridden if CS is set during compile time
+     Bool show_cs_only = False;
+     
      #ifdef CS
-     out << "- " << rat(scaffold_N50,1000000) << " Mb  = SCAFFOLD N50" 
-          << "   = N50 scaffold size" <<  endl;
+          show_cs_only = True;
      #endif
-     StatLogger::log( 
-          "scaffold_N50", scaffold_N50, "N50 scaffold length", true);
-     out << "- " << rat(scaffold_N60,1000000) << " Mb  = SCAFFOLD N60" 
-          << "   = N60 scaffold size" <<  endl;
-     StatLogger::log( 
-          "scaffold_N60", scaffold_N60, "N60 scaffold length" );
+     
+     // Go through all the stats and print them to out
 
-     // Print approximate genome size.
-
-     out << "- " << rat(est_genome_size,1000000000) << " Gb  = ASSEMBLY SIZE"
-          << "  = assembly size (only scaffolds >= 10 kb)" << endl;
-     StatLogger::log( 
-          "assembly_size", est_genome_size, "Assembly size", true);
-
-     // Print misassembly stats.
-
-     if ( genome.size( ) > 0 )
-     {    
-          // If we have no data to evaluate these error percentages
-          // we set them to 100 %
-          // misasm_perc is the sum of individual error percents (when not 100%)
-          // if we have no info at all then misasm_perc is 100%
-          double dis_err_perc = 100.0, ori_err_perc = 100.0, ord_err_perc = 100.0;
-          double mis = 0.0;
-          bool no_mis_data = true;
-          //
-          if ( total_err_dis_den > 0 ) {
-               dis_err_perc = nper(total_err_dis_num,total_err_dis_den);
-               mis += double(total_err_dis_num)/double(total_err_dis_den);
-               no_mis_data = false;
-          } 
-          StatLogger::log( "dis_err_perc",
-               dis_err_perc,
-               "pct of assembly in distant misjoin" );
-          out << "- " << per( total_err_dis_num, total_err_dis_den )
-               << " %   = dis error"
-               << "      = fraction of assembly in distant misjoin" << endl;
-          //
-          if ( total_err_ori_den > 0 ) {
-               ori_err_perc = nper(total_err_ori_num, total_err_ori_den );
-               mis += double(total_err_ori_num)/double(total_err_ori_den);
-               no_mis_data = false;
+     vec<int> max_width (3, 0);
+     vec<vec<String>> disp_data;
+     for ( auto & row : display ) {
+          if ( row[1].empty() ) {
+               disp_data.push_back( {row[0]} );
+          } else {
+               Bool cs = StatLogger::isStatCS( row[0] );
+               if ( !show_cs_only || (show_cs_only && cs)) {
+                    double val = StatLogger::getNumStat( row[0], -1 );
+                    if ( val == -1 ) {
+                         cout << Date( ) << ": could not find a value for " << row[0]
+                              << endl;
+                         continue;
+                    }
+                    int max = 9;
+                    if ( !row[4].empty() )
+                         max=row[4].Int();
+                    // IMPORTANT: val is printed as xxxx.yy
+                    vec<String> disp_row = {PrettyFormat( val, row[3], max ), 
+                         row[1], row[2]};
+                    disp_data.push_back( disp_row );
+                    for ( int i = 0; i < 3; i++ )
+                         max_width[i] = Max( max_width[i], (int)disp_row[i].size() );
+               }
           }
-          StatLogger::log( "ori_err_perc",
-               ori_err_perc,
-               "pct of assembly having wrong orientation" );
-          out << "- " << per( total_err_ori_num, total_err_ori_den )
-               << " %   = ori error"
-               << "      = fraction of assembly having wrong orientation" << endl;
-          //
-          if ( total_err_ord_den > 0 ) {
-               ord_err_perc = nper( total_err_ord_num, total_err_ord_den );
-               mis += double(total_err_ord_num)/double(total_err_ord_den);
-               no_mis_data = false;
+     }
+     String cat = "";
+     Bool printed = False;
+     for ( auto & row : disp_data ) {
+          if ( row.solo() ) {
+               cat = row[0];
+               printed = False;
+          } else {
+               if ( ! printed ) {
+                    hline( );
+                    out << cat << endl;
+                    printed = True;
+               }
+               out << "- ";
+               out << row[0];
+               out << " = ";
+               out << row[1];
+               for ( int j = 0; j < max_width[1]-row[1].isize(); j++ )
+                    out << " ";
+               out << " = ";
+               out << row[2];
+               out << endl;
           }
-          StatLogger::log( "ord_err_perc",
-               ord_err_perc,
-               "pct of assembly out of order" );
-          out << "- " << per( total_err_ord_num, total_err_ord_den )
-               << " %   = ord error"
-               << "      = fraction of assembly out of order" << endl;
-          // if we have no data on mis assemblies then set error to 100% 
-          if (no_mis_data)
-               mis = 1.0;
-          StatLogger::log( "misasm_perc", mis*100, "Misassembled pct" );
-          out << "- " << per( mis*10000, 10000 ) 
-               << " %   = MISASSEMBLED" << endl;    }
-
-     // Print gap stats.
-
-     if ( genome.size( ) > 0 )
-     {    cap_frac = cap_gap_total / double(genome_size);
-          StatLogger::log( "air_err_perc", 100*cap_frac,
-                    "pct of assembly in captured gaps");
-          out << "- " << per( cap_frac*10000, 10000 )    << " %   = air error"
-               << "      = fraction of assembly in captured gaps" << endl;
-          double uncap_frac = (genome_size-cov_total) / double(genome_size);
-          StatLogger::log( "vac_err_perc",
-                    100*uncap_frac, "pct of assembly in uncaptured gaps");
-          out << "- " << per( uncap_frac*10000, 10000 )    << " %   = vac error"
-               << "      = fraction of assembly in uncaptured gaps" << endl;
-          StatLogger::log("total_gap_perc",
-                    (cap_frac+uncap_frac)*100, "Total gap pct");
-          out << "- " << per( (cap_frac+uncap_frac)*10000, 10000 )
-               << " %   = GAP" << endl;    }
+     }
      hline( );
 
-     // Tidy up.
 
      // write only CS facing stats
      StatLogger::dump_csv( OUTDIR + "/summary_cs.csv" );
      // and all the stats here
      StatLogger::dump_json( OUTDIR + "/all_stats.json" );
      StatLogger::dump_json( OUTDIR + "/summary.json", True );
-     StatLogger::write( DIR+"/a.perf_stats" );
+     StatLogger::write( OUTDIR+"/a.perf_stats" );
 }

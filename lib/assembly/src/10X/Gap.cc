@@ -72,12 +72,14 @@ void ReinsertLoopsMap( digraphE<vec<int>> const& D, vec<int> const& dinv,
      }
 }
 
+// Warning: ReinsertLoops generated an invalid graph, because it has unused edges.
+
 void ReinsertLoops( const HyperBasevectorX& hb, const vec<int>& inv,
      digraphE<vec<int>>& D, vec<int>& dinv )
 {
      // please keep ReinsertLoopsMap above in sync with
      // changes below
-     cout << Date( ) << ": reinserting loops" << endl;
+     // cout << Date( ) << ": reinserting loops" << endl;
      vec<int> to_left, to_right;
      D.ToLeft(to_left), D.ToRight(to_right);
      int nd = D.E( );
@@ -86,8 +88,7 @@ void ReinsertLoops( const HyperBasevectorX& hb, const vec<int>& inv,
           if ( rd < d ) continue;
           if ( rd == d ) continue; // punting on this case (lazy)
           if ( IsCell( D.O(d) ) )
-          {    ReinsertLoop( d, hb, inv, D, dinv, to_left, to_right );    }    }
-     Validate( hb, inv, D, dinv );    }
+          {    ReinsertLoop( d, hb, inv, D, dinv, to_left, to_right );    }    }    }
 
 // this is a copy of ReinsertLoops above that is to be used by
 // ValidateMakeFasta. It enables tracking of cell index.
@@ -219,6 +220,7 @@ void ValidateGapEdges( const HyperBasevectorX& hb, const vec<int>& inv,
      const digraphE<vec<int>>& D, const vec<int>& dinv )
 {    vec<int> to_left, to_right;
      D.ToLeft(to_left), D.ToRight(to_right);
+     const int K = hb.K( );
      for ( int d1 = 0; d1 < D.E( ); d1++ )
      {    int d2 = dinv[d1];
           if ( d2 < d1 ) continue;
@@ -238,7 +240,56 @@ void ValidateGapEdges( const HyperBasevectorX& hb, const vec<int>& inv,
                b2.ReverseComplement( );
                if ( b1 != b2 )
                {    cout << "ValidateGapEdges: rc failed." << endl;
-                    Scram(1);    }    }
+                    Scram(1);    }
+               if ( int(b1.size()) < K-1 )
+               {    cout << "Seq gap edge " << d1 << " is shorter than K-1" << endl;
+                    Scram(1); }
+               // Check if sequence gap edge has the necessary K-1 overlap with 
+               // adjacent non-gap edges
+               for ( int pass = 1; pass <= 2; pass++ ) {
+                    const int d = (pass == 1 ? d1 : d2 );
+                    const basevector & b = ( pass == 1 ? b1 : b2 );
+                    if ( pass == 2 )
+                         b2.ReverseComplement( );
+                    const int ltrim = (pass == 1 ? ltrim1 : ltrim2 );
+                    const int rtrim = (pass == 1 ? rtrim1 : rtrim2 );
+                    const int v = to_left[d], w = to_right[d];
+                    for ( int i = 0; i < D.To(v).isize(); i++ ) {
+                         const int le = D.ITo(v, i);
+                         if ( D.O(le)[0] < 0 ) continue; 
+                         basevector edge = hb.Cat(D.O(le)), o1, o2;
+                         if ( int(edge.size()) < ltrim+K-1 ) {
+                              cout << "ltrim too large for seq gap " << d << endl;
+                              Scram(1);
+                         }
+                         o1.SetToSubOf( edge, edge.size()-ltrim-(K-1), K-1 );
+                         o2.SetToSubOf( b, 0, K-1 );
+                         if ( o1 != o2 )
+                         {    cout << "No K-1 overlap of " << d << " on the left" 
+                                   << endl;
+                              PRINT(o1);
+                              PRINT(o2);
+                              Scram(1); }
+                    }
+                    for ( int i = 0; i < D.From(w).isize(); i++ ) {
+                         const int re = D.IFrom(w, i);
+                         if ( D.O(re)[0] < 0 ) continue;
+                         basevector edge = hb.Cat(D.O(re)), o1, o2;
+                         if ( int(edge.size()) < rtrim+K-1 ) {
+                              cout << "rtrim too large for seq gap " << d << endl;
+                              Scram(1);
+                         }
+                         o1.SetToSubOf( edge, rtrim, K-1 );
+                         o2.SetToSubOf( b, b.size()-(K-1), K-1 );
+                         if ( o1 != o2 )
+                         {    cout << "No K-1 overlap of " << d << " on the right" 
+                                   << endl;
+                              PRINT(o1);
+                              PRINT(o2);
+                              Scram(1); }
+ 
+                    }
+               }    }
           if ( IsCell(x1) )
           {    cell c1, c2;
                c1.CellDecode(x1), c2.CellDecode(x2);
@@ -282,7 +333,9 @@ void ValidateGapEdges( const HyperBasevectorX& hb, const vec<int>& inv,
                     Scram(1);    }
                for ( int g = 0; g < G1.E( ); g++ )
                {    if ( G1.O(g) != G2.O(g) )
-                    {    cout << "ValidateGapEdges: gap cell asymmetry." << endl;
+                    {    cout << "ValidateGapEdges: gap cell asymmetry at edge " 
+                              << d1 << "." << endl;
+                         cout << g << ": " << printSeq(G1.O(g)) << " v " << printSeq(G2.O(g)) << endl;
                          Scram(1);    }    }    }    }    }
 
 void Munch( digraphE<vec<int>>& D, const vec<int>& dinv, vecbasevector& tigs, 
@@ -326,31 +379,41 @@ void Munch( digraphE<vec<int>>& D, const vec<int>& dinv, vecbasevector& tigs,
 
           int w = to_right[d];
           GapToSeq( D.O(d), ltrim, rtrim, b );
-          int d1 = D.ITo(v,0), d2 = D.IFrom(w,0);
+          int d1 = -1, d2 = -1;
+          if ( D.To(v).nonempty( ) ) d1 = D.ITo(v,0); 
+          if ( D.From(w).nonempty( ) ) d2 = D.IFrom(w,0);
           Bool problem = False;
-          if ( dlens[d1] - 1 < ltrim ) problem = True;
-          if ( dlens[d2] - 1 < rtrim ) problem = True;
-          if ( d1 == d2 && dlens[d1] - 1 < ltrim + rtrim ) problem = True;
+          if ( d1 >= 0 && dlens[d1] - 1 < ltrim ) problem = True;
+          if ( d2 >= 0 && dlens[d2] - 1 < rtrim ) problem = True;
+          if ( d1 >= 0 && d1 == d2 && dlens[d1] - 1 < ltrim + rtrim ) problem = True;
+          if ( d1 >= 0 && d1 == dinv[d1] && ltrim > 0 ) problem = True;
+          if ( d2 >= 0 && d2 == dinv[d2] && rtrim > 0 ) problem = True;
           if (problem)
           {    nprobs++;
                continue;    }
 
           // Test for illegal problems.
 
+          /*
           for ( int j = 0; j < D.From(v).isize( ); j++ )
           {    int d = D.IFrom( v, j );
                int w = to_right[d];
                ForceAssert( D.To(v).solo( ) );
                if ( !D.From(w).solo( ) ) cout << "Problem at edge " << d << endl;
                ForceAssert( D.From(w).solo( ) );    }
+          */
 
           // Do the edit.
 
-          dlens[d1] -= ltrim;
-          dlens[d2] -= rtrim;
-          int rd1 = dinv[d1], rd2 = dinv[d2];
-          if ( rd1 != d1 ) dlens[rd1] -= ltrim;
-          if ( rd2 != d2 ) dlens[rd2] -= rtrim;
+          int rd1 = -1, rd2 = -1;
+          if ( d1 >= 0 )
+          {    dlens[d1] -= ltrim;
+               rd1 = dinv[d1]; 
+               if ( rd1 != d1 ) dlens[rd1] -= ltrim;    }
+          if ( d2 >= 0 )
+          {    dlens[d2] -= rtrim;
+               rd2 = dinv[d2];
+               if ( rd2 != d2 ) dlens[rd2] -= rtrim;    }
           for ( int j = 0; j < D.From(v).isize( ); j++ )
           {    int d = D.IFrom( v, j );
                int w = to_right[d];
@@ -372,10 +435,7 @@ void Munch( digraphE<vec<int>>& D, const vec<int>& dinv, vecbasevector& tigs,
                // Now edit the adjacent edges.
 
                if ( j == 0 )
-               {    // int d1 = D.ITo(v,0), d2 = D.IFrom(w,0);
-                    ForceAssert( d1 != rd1 );
-                    ForceAssert( d2 != rd2 );
-                    if ( ltrim > 0 )
+               {    if ( d1 >= 0 && ltrim > 0 )
                     {    while(1)
                          {    int n = tigs[ D.O(d1).back( ) ].isize( ) - HBK + 1;
                               if ( n <= ltrim )
@@ -393,7 +453,7 @@ void Munch( digraphE<vec<int>>& D, const vec<int>& dinv, vecbasevector& tigs,
                               D.OMutable(rd1).front( ) = tigs.size( );
                               tigs.push_back(b);    
                               inv.push_back( E+1, E );    }    }
-                    if ( rtrim > 0 )
+                    if ( d2 >= 0 && rtrim > 0 )
                     {    while(1)
                          {    int n = tigs[ D.O(d2).front( ) ].isize( ) - HBK + 1;
                               if ( n <= rtrim )

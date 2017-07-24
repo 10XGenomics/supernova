@@ -227,6 +227,10 @@ template <class T, class A=typename DefaultAllocator<T>::type> class vec
     T tmp;
     while ( rdr.next(&tmp) ) push_back(tmp); }
 
+  template <class U>
+  void prepend( const vec<U>& y ) 
+  {    this->insert( this->begin( ), y.begin( ), y.end( ) );    }
+
 // ===========================================================================
 //
 // FUNCTIONS TO TEST IF VECTOR HAS AN ATTRIBUTE
@@ -235,6 +239,7 @@ template <class T, class A=typename DefaultAllocator<T>::type> class vec
 
   bool nonempty( ) const { return ! this->empty( ); }
   bool solo( ) const { return this->size( ) == 1; }
+  bool duo( ) const { return this->size( ) == 2; }
 
   bool Ordered( ) const
   {    for ( size_type i = 1; i < this->size( ); i++ )
@@ -509,6 +514,12 @@ template <class T, class A=typename DefaultAllocator<T>::type> class vec
   {    size_type j;
        for ( j = i + 1; j < this->size( ); j++ )
             if ( (*this)[j] != (*this)[i] ) break;
+       return j;    }
+
+  inline size_type NextDiff1( size_type i ) const
+  {    size_type j;
+       for ( j = i + 1; j < this->size( ); j++ )
+            if ( (*this)[j].first != (*this)[i].first ) break;
        return j;    }
 
   friend int compare( vec const& v1, vec const& v2 )
@@ -983,6 +994,10 @@ template<class T> istream& operator>>(istream& s, vec<T>& v)
        s >> v[i];   // Breaks cxx
      return s;    }
 
+template<class T> vec<T> Cat( const vec<T>& v1, const vec<T>& v2 )
+{    vec<T> x = v1;
+     x.append(v2);
+     return x;    }
 
 istream& operator>>(istream& s, vec<String>& v);
 

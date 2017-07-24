@@ -214,7 +214,7 @@ void Flipper( const HyperBasevectorX& hb, const vec<int>& inv, const vec<Bool>& 
      vec<vec<vec< pair<int,Bool> >>> groups( dlines.size( ) );
      cout << Date( ) << ": main loop, looping over " << proc.size( )
           << " lines, showing 100 dots:" << endl;
-     int ndots = 0, stopped = 0;
+     int64_t ndots = 0, stopped = 0;
      #pragma omp parallel for schedule(dynamic, 1)
      for ( int pl = 0; pl < proc.isize( ); pl++ )
      {    int l = proc[pl];
@@ -711,7 +711,7 @@ void Flipper( const HyperBasevectorX& hb, const vec<int>& inv, const vec<Bool>& 
           report[l] = out.str( );
 
           #pragma omp critical
-          {    MakeDots( stopped, ndots, proc.size( ) );    }    }
+          {    MakeDots( stopped, ndots, (int64_t) proc.size( ) );    }    }
 
      // Edit the graph.
 

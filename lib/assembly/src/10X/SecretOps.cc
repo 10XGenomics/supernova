@@ -404,10 +404,17 @@ template void IntSpaceExts( const int e, const HyperBasevectorX& hb,
      const vec<Bool>& bad, const Bool GLOBAL, const Bool PRINT_RIGHT_EXTS,
      const int mu, vec<vec<int>>& ext, const Bool verbose, IntSpaceExtsWorkspace& );
 
+// Note for MarkDups.  An "artifactual duplicate" is a read that appears to be
+// part of a duplicate pair and which is base by base and quality score by quality
+// score identical to another read.  If present in large numbers, they would
+// presumably have to arise from an informatic mixup.
+
 template< class VB, class VQ, class VP >
 void MarkDups( VB& bases, VQ& quals, VP& paths, const vec<int32_t>& bc,
      vec<Bool>& dup, double& interdup_rate, const Bool verbose )
-{
+{    
+     cout << Date( ) << ": MarkDups, version 1" << endl;
+
      // Heuristics.
 
      const int BHEAD = 5;
@@ -592,6 +599,8 @@ template< class VB, class VQ>
 void MarkDups( VB& bases, VQ& quals, ReadPathVecX& paths, const HyperBasevectorX& hb, const vec<int32_t>& bc,
      vec<Bool>& dup, double& interdup_rate, const Bool verbose)
 {
+     cout << Date( ) << ": MarkDups, version 2" << endl;
+
      // Heuristics.
 
      const int BHEAD = 5;
@@ -617,83 +626,88 @@ void MarkDups( VB& bases, VQ& quals, ReadPathVecX& paths, const HyperBasevectorX
                     n += bases[id2][j];    }
                X[id1] = make_quad( p[0], p.getOffset( ), n, id1 );    }    }
 
-     // Sort, then mark dups.
+     // Scoping.
 
-     cout << Date( ) << ": sorting" << endl;
-//     ParallelSort(X);
-     sortInPlaceParallel( X.begin(), X.end() );
-     cout << Date( ) << ": marking dups" << endl;
-//     vec<Bool> dup1( X.size( ), False );
-     std::set< int64_t > dup1;
      int64_t ndups = 0, interdups = 0;
-     for ( int64_t j = 0; j < X.jsize( ); j++ )
-     {    if ( X[j].first < 0 ) continue;
-          int64_t k;
-          for ( k = j + 1; k < X.jsize( ); k++ )
-          {    if ( X[k].first != X[j].first || X[k].second != X[j].second ) break;
-               if ( X[k].third != X[j].third ) break;    }
-          if ( k - j > 1 )
-          {    for ( int64_t l = j; l < k; l++ ) {
-                    dup1.insert( X[l].fourth );
-              }
-               ndups += k - j - 1;
-               Bool inter = False;
-               int32_t b = bc[ X[j].fourth ];
-               for ( int64_t l = j + 1; l < k; l++ )
-               {    if ( b == 0 ) b = bc[ X[l].fourth ];
-                    else if ( bc[ X[l].fourth ] != b ) inter = True;    }
-               if (inter) interdups += k - j - 1;
-               if (verbose)
-               {    Bool print = False;
-                    const int print_freq = 10000;
-                    for ( int64_t l = j; l < k; l++ )
-                         if ( randomx( ) % print_freq == 0 ) print = True;
-                    if (print)
-                    {    cout << "\nduplicate group:\n";
-                         {    for ( int64_t l = j; l < k; l++ )
-                              {    cout << "[" << l-j+1 << "] " << X[l].fourth
-                                        << endl;    }    }    }    }    }
-          j = k - 1;    }
-     interdup_rate = double(interdups) / double(ndups);
+     vec<int> qsum;
+     {
+          // Sort, then mark dups.
 
-     PRINT(dup1.size());
+          cout << Date( ) << ": sorting, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;
+          sortInPlaceParallel( X.begin(), X.end() );
+          cout << Date( ) << ": marking dups, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;
+          std::set< int64_t > dup1;
+          for ( int64_t j = 0; j < X.jsize( ); j++ )
+          {    if ( X[j].first < 0 ) continue;
+               int64_t k;
+               for ( k = j + 1; k < X.jsize( ); k++ )
+               {    if ( X[k].first != X[j].first || X[k].second != X[j].second ) 
+                         break;
+                    if ( X[k].third != X[j].third ) break;    }
+               if ( k - j > 1 )
+               {    for ( int64_t l = j; l < k; l++ ) {
+                         dup1.insert( X[l].fourth );
+                   }
+                    ndups += k - j - 1;
+                    Bool inter = False;
+                    int32_t b = bc[ X[j].fourth ];
+                    for ( int64_t l = j + 1; l < k; l++ )
+                    {    if ( b == 0 ) b = bc[ X[l].fourth ];
+                         else if ( bc[ X[l].fourth ] != b ) inter = True;    }
+                    if (inter) interdups += k - j - 1;
+                    if (verbose)
+                    {    Bool print = False;
+                         const int print_freq = 10000;
+                         for ( int64_t l = j; l < k; l++ )
+                              if ( randomx( ) % print_freq == 0 ) print = True;
+                         if (print)
+                         {    cout << "\nduplicate group:\n";
+                              {    for ( int64_t l = j; l < k; l++ )
+                                   {    cout << "[" << l-j+1 << "] " << X[l].fourth
+                                             << endl;    }    }    }    }    }
+               j = k - 1;    }
+          interdup_rate = double(interdups) / double(ndups);
+          PRINT(dup1.size());
+     
+          // Compute qsums.
 
-     // Compute qsums.
-
-     cout << Date( ) << ": computing qsums" << endl;
-     vec<int> qsum( X.size( ), 0 );
-     const int64_t batch = 100000;
-     auto quals_clone = quals;
-     auto comp = []( quad<int,int,int,int64_t>& t1, quad<int,int,int,int64_t>& t2) {
-           int result = compare(t1.fourth,t2.fourth);
-           if ( !result ) result = compare(t1.third,t2.third);
-           if ( !result ) result = compare(t1.second,t2.second);
-           if ( !result ) result = compare(t1.first,t2.first);
-           return result;
-     };
-     cout << Date() << ": ...sorting" << endl;
-     sortInPlaceParallel( X.begin(), X.end(), comp);
-     cout << Date() << ": ...summing" << endl;
-     #pragma omp parallel for schedule(dynamic,1) firstprivate(quals_clone)
-     for ( int64_t bi = 0; bi < X.jsize( ); bi += batch )
-     {    qualvector q;
-          for ( int64_t j = bi; j < Min( bi + batch, X.jsize( ) ); j++ )
-          {
-               int64_t id1 = X[j].fourth;
-               if ( dup1.count( id1 ) == 0 ) continue;
-               int64_t id2 = ( id1 % 2 == 0 ? id1 + 1 : id1 - 1 );
-               quals_clone[id1].unpack(&q);
-               for ( int l = 0; l < (int) q.size( ); l++ )
-                    qsum[id1] += q[l];
-               quals_clone[id2].unpack(&q);
-               for ( int l = 0; l < (int) q.size( ); l++ )
-                    qsum[id1] += q[l];    }    }
-
+          cout << Date( ) << ": computing qsums, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;
+          qsum.resize( X.size( ), 0 );
+          const int64_t batch = 100000;
+          auto quals_clone = quals;
+          auto comp = []( 
+               quad<int,int,int,int64_t>& t1, quad<int,int,int,int64_t>& t2) {
+               int result = compare(t1.fourth,t2.fourth);
+               if ( !result ) result = compare(t1.third,t2.third);
+               if ( !result ) result = compare(t1.second,t2.second);
+               if ( !result ) result = compare(t1.first,t2.first);
+               return result;
+          };
+          cout << Date() << ": ...sorting" << endl;
+          sortInPlaceParallel( X.begin(), X.end(), comp);
+          cout << Date() << ": ...summing" << endl;
+          #pragma omp parallel for schedule(dynamic,1) firstprivate(quals_clone)
+          for ( int64_t bi = 0; bi < X.jsize( ); bi += batch )
+          {    qualvector q;
+               for ( int64_t j = bi; j < Min( bi + batch, X.jsize( ) ); j++ )
+               {
+                    int64_t id1 = X[j].fourth;
+                    if ( dup1.count( id1 ) == 0 ) continue;
+                    int64_t id2 = ( id1 % 2 == 0 ? id1 + 1 : id1 - 1 );
+                    quals_clone[id1].unpack(&q);
+                    for ( int l = 0; l < (int) q.size( ); l++ ) qsum[id1] += q[l];
+                    quals_clone[id2].unpack(&q);
+                    for ( int l = 0; l < (int) q.size( ); l++ )
+                         qsum[id1] += q[l];    }    }    }
 
      // Complete duplicate identification.
-     sortInPlaceParallel( X.begin(), X.end() );
 
-     cout << Date( ) << ": finalizing dups" << endl;
+     sortInPlaceParallel( X.begin(), X.end() );
+     cout << Date( ) << ": finalizing dups, mem = " << MemUsageGBString( )
+          << ", peak = " << PeakMemUsageGBString( ) << endl;
      vec< triple<basevector,qualvector,int64_t> > qb;
      vec<Bool> art( bases.size( )/2, False );
      for ( int64_t j = 0; j < X.jsize( ); j++ )
@@ -743,17 +757,18 @@ void MarkDups( VB& bases, VQ& quals, ReadPathVecX& paths, const HyperBasevectorX
                if ( l != best ) dup[ X[l].fourth/2 ] = True;
           j = k - 1;    }
 
+     // Compute stats.
+
      double dup_perc = 100.0 * Sum(dup) / ( bases.size( )/2 );
      cout << setiosflags(ios::fixed) << setprecision(2)
           << dup_perc  << resetiosflags(ios::fixed)
           << "% of pairs appear to be duplicates" << endl;
      StatLogger::log( "dup_perc", dup_perc, "Pct duplicate", true );
-     
      cout << setiosflags(ios::fixed) << setprecision(2)
           << ( 100.0 * interdups ) / ndups << resetiosflags(ios::fixed)
           << "% of duplicates involve multiple barcodes" << endl;
-     StatLogger::log( "interdup_perc", interdup_rate*100.0, "Pct multi-bc duplicates", false );
-
+     StatLogger::log( 
+          "interdup_perc", interdup_rate*100.0, "Pct multi-bc duplicates", false );
      double art_dup_perc = 100.0 * Sum(art) / ( bases.size( )/2 );
      cout << setiosflags(ios::fixed) << setprecision(2)
           << art_dup_perc << resetiosflags(ios::fixed)
@@ -764,9 +779,7 @@ void MarkDups( VB& bases, VQ& quals, ReadPathVecX& paths, const HyperBasevectorX
                << "duplicates.\n";
           cout << "It may be that your input files are damaged.\n\n";    }
      cout << Date( ) << ": done marking dups, time used = " << TimeSince(clock)
-          << endl;
-
-}
+          << endl;    }
 
 template void MarkDups( VirtualMasterVec<basevector>& bases,
      VirtualMasterVec<PQVec>&, ReadPathVecX&, const HyperBasevectorX&, const vec<int32_t>&,
@@ -793,8 +806,8 @@ template void MarkDups( MasterVec<basevector>& bases,
 
 void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
      const ReadPathVecX& paths, const vec<int64_t>& bci, const VecIntVec & ebcx,
-     vec< triple<int,int,int> >& qept )
-{    cout << Date( ) << ": start AllTinks" << endl;
+     vec< triple<int,int,int> >& qept, const int verbosity )
+{    if ( verbosity >= 1 ) cout << Date( ) << ": start AllTinks" << endl;
 
      // Algorithmic heuristics.
 
@@ -807,14 +820,10 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
      const int npasses = 20;
      const int64_t batches = 20;
 
-     // Logging control.
-
-     Bool verbose = False;
-
      // Identify line-like edge groups.  These are simple lines with binary
      // bubbles.  Map all edges in the group to the first edge.
 
-     cout << Date( ) << ": defining groups" << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": defining groups" << endl;
      vec<int> to_first( hb.E( ), vec<int>::IDENTITY );
      vec<vec<int>> groups( hb.E( ) );
      #pragma omp parallel for
@@ -843,9 +852,9 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
 
      // Define a few constants.
 
-     cout << Date( ) << ": defining constants" << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": defining constants" << endl;
      int NBC = bci.size( ) - 1;
-     cout << Date( ) << ": have " << ToStringAddCommas((int64_t) paths.size( )) << " reads" << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": have " << ToStringAddCommas((int64_t) paths.size( )) << " reads" << endl;
      int64_t unbar = bci[1];
 
      // Find good barcodes.
@@ -856,19 +865,19 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
      {    int64_t nbc = bci[b+1] - bci[b];
           if ( nbc < min_reads || nbc > max_reads ) continue;
           gbc.push_back(b);    }
-     cout << Date( ) << ": have " << ToStringAddCommas( gbc.size( ) )
+     if ( verbosity >= 1 ) cout << Date( ) << ": have " << ToStringAddCommas( gbc.size( ) )
           << " qualified barcodes" << endl;
 
      // Go through ten passes.
 
-     cout << Date( ) << ": start main loop" << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": start main loop" << endl;
      double mclock = WallClockTime( );
      vec<pair<int,int>> ep, qep;
      for ( int d = 0; d < npasses; d++ )
      {
           // Find edge pairs.
 
-          if (verbose) cout << Date( ) << ": finding edge pairs" << endl;
+          if ( verbosity >= 2 ) cout << Date( ) << ": finding edge pairs" << endl;
           ep.clear( );
           #pragma omp parallel for
           for ( int ig = 0; ig < gbc.isize( ); ig++ )
@@ -907,12 +916,12 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
 
           // Sort edge pairs.
 
-          if (verbose) cout << Date( ) << ": sorting edge pairs" << endl;
+          if ( verbosity >= 2 ) cout << Date( ) << ": sorting edge pairs" << endl;
           ParallelSort(ep);
 
           // Find qualified edge pairs.
 
-          if (verbose) cout << Date( ) << ": finding qualified edge pairs" << endl;
+          if ( verbosity >= 2 ) cout << Date( ) << ": finding qualified edge pairs" << endl;
           vec<int64_t> starts( batches+1, 0 );
           for ( int i = 0; i <= batches; i++ )
                starts[i] = ( i * ep.jsize( ) ) / batches;
@@ -930,12 +939,12 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
                     i = j - 1;    }    }
           for ( int b = 0; b < batches; b++ )
                qep.append( qepb[b] );    }
-     cout << Date( ) << ": time used in main loop = " << TimeSince(mclock) << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": time used in main loop = " << TimeSince(mclock) << endl;
 
      // Expand edge pairs by groups.  Bad in multiple ways, may need wholistic
      // solution.
 
-     cout << Date( ) << ": expanding " << ToStringAddCommas( qep.size( ) )
+     if ( verbosity >= 1 ) cout << Date( ) << ": expanding " << ToStringAddCommas( qep.size( ) )
           << " edge pairs by groups" << endl;
      Destroy(ep);
      {    int64_t N = qep.size( );
@@ -953,15 +962,15 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
                               adds[bi/batch].push_back(
                                    make_pair( xf1, f2 ) );    }    }    }    }
           qep.clear( );
-          cout << Date( ) << ": appending" << endl;
+          if ( verbosity >= 1 ) cout << Date( ) << ": appending" << endl;
           for ( int i = 0; i < adds.isize( ); i++ )
                qep.append( adds[i] );    }
-     cout << Date( ) << ": now have " << ToStringAddCommas( qep.size( ) )
+     if ( verbosity >= 1 ) cout << Date( ) << ": now have " << ToStringAddCommas( qep.size( ) )
           << " edge pairs" << endl;
 
      // Append counts.
 
-     cout << Date( ) << ": appending counts" << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": appending counts" << endl;
 
      qept.resize( qep.size( ) );
      #pragma omp parallel for
@@ -992,11 +1001,11 @@ void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,
 
      // Sort and write.
 
-     cout << Date( ) << ": sorting pairs" << endl;
+     if ( verbosity >= 1 ) cout << Date( ) << ": sorting pairs" << endl;
      ParallelSort(qept);
-     cout << Date( ) << ": " << ToStringAddCommas( qept.size( ) )
+     if ( verbosity >= 1 ) cout << Date( ) << ": " << ToStringAddCommas( qept.size( ) )
           << " pairs of edges connected by several barcodes" << endl;
-     cout << Date( ) << ": done, time used = " << TimeSince(clock)
+     if ( verbosity >= 1 ) cout << Date( ) << ": done, time used = " << TimeSince(clock)
           << ", peak mem = " << PeakMemUsageGBString( ) << endl;    }
 
 double SinglesRate( const vec<int>& kmers, const vec<int>& inv,
@@ -1047,12 +1056,19 @@ void MakeClosures( const HyperBasevectorX& hb, const vec<int>& inv,
 
      // Make closures.
      
+     if (verbose)
+     {    cout << Date( ) << ": making closures, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;    }
      int64_t opcount = 0;
-     if ( paths_index_file.size() > 0 ) {
-          cout << Date ( ) << ": loading paths index" << endl;
+     if ( paths_index_file.size() > 0 )
+     {    cout << Date ( ) << ": loading paths index" << endl;
           paths_index.clear( );
           paths_index.ReadAll ( paths_index_file );
-     }
+
+          if (verbose)
+          {    cout << Date( ) << ": load complete, mem = " << MemUsageGBString( )
+                    << ", peak = " << PeakMemUsageGBString( ) << endl;    }    }
+
      Closer( hb, inv, paths, paths_index, dup, bad, all_closures, opcount,
           True, ( verbose ? 1 : 0 ) );
      
@@ -1064,8 +1080,8 @@ void MakeClosures( const HyperBasevectorX& hb, const vec<int>& inv,
      // Double.
 
      if (verbose)
-     {    cout << Date( ) << ": doubling closures, peak mem = "
-               << PeakMemUsageGBString( ) << endl;    }
+     {    cout << Date( ) << ": doubling closures, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;    }
      int64_t nac = all_closures.size( );
      all_closures.resize( 2*nac );
      #pragma omp parallel for schedule( dynamic, 10000 )
@@ -1076,8 +1092,8 @@ void MakeClosures( const HyperBasevectorX& hb, const vec<int>& inv,
           for ( int j = 0; j < x.isize( ); j++ )
                x[j] = inv[ x[j] ];    }
      if (verbose)
-     {    cout << Date( ) << ": sorting closures, peak mem = "
-               << PeakMemUsageGBString( ) << endl;    }
+     {    cout << Date( ) << ": sorting closures, mem = " << MemUsageGBString( ) 
+               << ", peak = " << PeakMemUsageGBString( ) << endl;    }
      UniqueSort(all_closures);
 
      // Add long edges that were somehow missed.
@@ -1085,12 +1101,13 @@ void MakeClosures( const HyperBasevectorX& hb, const vec<int>& inv,
      if (verbose)
      {    cout << Date( ) << ": adding back long edges" << endl;    }
      int64_t N = all_closures.size( );
-     vec<Bool> present( hb.E( ), False );
-     for ( int64_t i = 0; i < N; i++ )
-     for ( int j = 0; j < all_closures[i].isize( ); j++ )
-          present[ all_closures[i][j] ] = True;
-     for ( int e = 0; e < hb.E( ); e++ )
-          if ( !present[e] && hb.Kmers(e) >= 200 ) all_closures.push_back( {e} );
+     {    vec<Bool> present( hb.E( ), False );
+          for ( int64_t i = 0; i < N; i++ )
+          for ( int j = 0; j < all_closures[i].isize( ); j++ )
+               present[ all_closures[i][j] ] = True;
+          for ( int e = 0; e < hb.E( ); e++ )
+          {    if ( !present[e] && hb.Kmers(e) >= 200 ) 
+                    all_closures.push_back( {e} );     }    }
      if (verbose) cout << Date( ) << ": sorting again" << endl;
      UniqueSort(all_closures);
 

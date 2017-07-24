@@ -10,7 +10,7 @@ import martian
 import gzip
 import re
 import socket
-import tenkit.supernova as tk_sn
+import tenkit.supernova.alerts as alerts
 
 def check_key(n, dict_in, name, tys):
     if not dict_in.has_key(name):
@@ -65,10 +65,12 @@ def main(args, outs):
                 if not is_int(lane):
                     martian.exit("Lanes must be a comma-separated list of numbers.")
 
-    # Open file handles limit
-    ok, msg = tk_preflight.check_open_fh()
-    if not ok:
-        martian.exit(msg)
+    # Open file handles limit - per SUPERNOVA-152, only check this on the execution machine.
+    # We can tell if we're on the execution machine by looking at args.check_executables
+    if args.check_executables:
+        ok, msg = tk_preflight.check_open_fh()
+        if not ok:
+            martian.exit(msg)
 
     ## compile a list of fastq files
     fastq_files = []
@@ -135,9 +137,29 @@ def main(args, outs):
     global_avg = global_avg/num_files
     martian.log_info("Estimated read length = %.1f, Estimated total read input = %.1f"% (global_avg, total_reads))
 
-    PreflightAlert = tk_sn.AlertLogger(stage="preflight")
+    PreflightAlert = alerts.AlertLogger(stage="preflight")
     PreflightAlert.issue("mean_read_length", global_avg)
-     
+   
+
+    # verify type and range for downsampling parameters
+    # Note that non-numerical values for bc_subsample_rate and target_reads in mro trickle down as 'None'
+    if args.downsample is not None:
+        bc_subsample_rate = args.downsample.get("bc_subsample_rate", None)
+        if bc_subsample_rate is not None:
+            if not isinstance(bc_subsample_rate, float) and not isinstance(bc_subsample_rate, int):
+                martian.exit("Specified barcode fraction: %s is not a fraction. Please specify a valid float between 0 and 1." % str(bc_subsample_rate))
+            if bc_subsample_rate<=0 or bc_subsample_rate>1:
+                martian.exit("Specified barcode fraction: %s is not between 0 and 1. Please specify a valid float between 0 and 1." % str(bc_subsample_rate))
+            if abs(bc_subsample_rate)<1e-5:
+                martian.exit("Specified barcode fraction: %s is too close to 0 and thus impractical." % str(bc_subsample_rate))
+
+        target_reads = args.downsample.get("target_reads", None)
+        if target_reads is not None:
+            if not isinstance(target_reads, int) and not isinstance(target_reads, float):
+                martian.exit("Specified maxreads: %s is not a number. Please specify an integer larger than one for maxreads" % str(target_reads))
+            if target_reads < 1:
+                martian.exit("Specified maxreads: %s is less than one. Please specify an integer larger than one for maxreads" % str(target_reads))
+
     ### if the user has supplied a target number of reads
     ### use that in the memory check.
     #if args.downsample is not None:

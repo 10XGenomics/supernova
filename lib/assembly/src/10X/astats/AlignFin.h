@@ -27,7 +27,11 @@ void AlignFin(
 
      const Bool longest_only, // kill all but longest alignment
      const Bool stats = True, // compute N50 perfect stretch and weighted error rate
-     const vec<int>& targets = vec<int>( ) // use only these finished ids
+     const vec<int>& targets = vec<int>( ), // use only these finished ids
+     const int MIN_LINE = 10000,
+     const Bool full_master = True,
+     const Bool optb = False,
+     const Bool log1 = False
 
      );
 

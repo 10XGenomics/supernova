@@ -980,6 +980,11 @@ void Validate( const HyperBasevector& hb, const ReadPathVecX& paths ) {
 	TracebackThisProcess();
 }
 
+void Validate( const HyperBasevectorX& hb, const ReadPathVecX& paths ) {
+    if (ValidateAllReadPaths(hb, paths) == false)
+	TracebackThisProcess();
+}
+
 void TestIndex( const HyperBasevector& hb,
         const ReadPathVec& paths, const VecULongVec& invPaths)
 {

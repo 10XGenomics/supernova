@@ -487,6 +487,16 @@ template Bool digraphE<BaseVec>::TestValid(const Bool) const;
 template digraphE<BaseVec>::digraphE();
 template digraphE<BaseVec>::digraphE(vec<BaseVec> const&, const ConstructorBehavior);
 template digraphE<BaseVec>::digraphE(const vec<vec<int> >&, const vec<vec<int> >&, const vec<BaseVec>&, const vec<vec<int> >&, const vec<vec<int> >&, const Bool);
+
+template digraphE<BaseVec>::digraphE(vec<digraphE<BaseVec>> const&);
+template void digraphE<BaseVec>::Initialize(vec<digraphE<BaseVec>> const&);
+template digraphE<BaseVec>::digraphE<BaseVec>(digraphE<BaseVec> const&, equiv_rel_template<int> const&);
+template void digraphE<BaseVec>::Initialize(digraphE<BaseVec> const&, equiv_rel_template<int> const&);
+template digraphE<BaseVec>::digraphE( const vec<digraphE<BaseVec>>& g, 
+          const vec< pair< pair<int,int>, pair<int,int> > >& joins );
+template void digraphE<BaseVec>::Initialize( const vec<digraphE<BaseVec>>& g, 
+          const vec< pair< pair<int,int>, pair<int,int> > >& joins );
+
 template int digraphE<BaseVec>::AddEdge(int, int, BaseVec const&);
 template void digraphE<BaseVec>::AddVertices(int);
 template void digraphE<BaseVec>::Clear();
@@ -590,6 +600,8 @@ template void digraphE<BaseVec>::DeleteEdgesFrom(int, vec<int> const&);
 template void digraphE<BaseVec>::DeleteEdgesTo(int, vec<int> const&);
 template void digraphE<BaseVec>::DeleteEdgeTo(int, int);
 template void digraphE<BaseVec>::SplayVertex(int);
+template void digraphE<BaseVec>::SplayVertexWithUpdate(int, vec<int> &, vec<int> &);
+
 
 template void digraphE<BaseVec>::InitialEdges(vec<int>&) const;
 template void digraphE<BaseVec>::TerminalEdges(vec<int>&) const;
@@ -657,8 +669,13 @@ template int digraphE<BaseVec>::E() const;
 
 template void digraphE<BaseVec>::DeleteEdgesParallel( const vec<int>& );
 template void digraphE<BaseVec>::DeleteEdgesParallel( const vec<Bool>& );
+template int digraphE<BaseVec>::AddEdgeWithUpdate( int v, int w,
+     const BaseVec & e, vec<int>& to_left, vec<int>& to_right );
 
 template void digraphE<BaseVec>::ComponentsEFast( vec<vec<int>>& ) const;
+
+template void digraphE<BaseVec>::CyclicCoreEdges( vec<int>& x ) const;
+template void digraphE<BaseVec>::Append(digraphE<BaseVec> const&);
 
 template digraphEX<BaseVec>::digraphEX(digraphE<BaseVec> const&);
 
@@ -685,3 +702,6 @@ template void digraphE<basevector>::Initialize(
 
 template Bool digraphEX<basevector>::EdgePaths( const int, const int,
      vec< vec<int> >&, const int, const int, const int, const Bool ) const;
+
+template void digraphE<basevector>::ReorderEdges( vec<int64_t>& permutation );
+

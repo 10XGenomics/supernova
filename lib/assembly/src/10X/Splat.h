@@ -9,6 +9,6 @@
 #include "paths/HyperBasevector.h"
 
 void Splat( const HyperBasevectorX& hb, const vec<int>& inv,
-     const vecbasevector& closures, digraphE<vec<int>>& D, vec<int>& dinv );
+     const vec<vec<int>> & cpaths, digraphE<vec<int>>& D, vec<int>& dinv );
 
 #endif

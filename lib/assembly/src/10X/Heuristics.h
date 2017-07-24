@@ -14,7 +14,18 @@ const int MIN_KMERS2 = 100;  // minimum number of kmers in edge linked to by it
 const int MIN_LEN = 100;
 const double MIN_NHOOD_FRAC = 0.1;
 
+// These heuristics define a line everywhere in the code base 
+// EXCEPT when we are evaluating the assembly
+
 const int MAX_CELL_PATHS = 20;
 const int MAX_CELL_DEPTH = 5;
+
+// Heuristics that define a line for evaluation
+
+const int MAX_CELL_PATHS_EVALUATION = 4000;
+const int MAX_CELL_DEPTH_EVALUATION = 20;
+
+// const int MAX_CELL_PATHS_NEW = 20000;
+// const int MAX_CELL_DEPTH_NEW = 40;
 
 #endif

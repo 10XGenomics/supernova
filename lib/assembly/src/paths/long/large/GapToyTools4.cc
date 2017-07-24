@@ -129,6 +129,61 @@ void GenerateLookupsNaif( vecbasevector const& trans, HyperBasevector const& hb,
 
 }; // end of anonymous namespace
 
+void BuildSeqGaps( vecbasevector& allx, const HyperBasevector& hb, const digraphE<vec<int>>& D )
+{
+     vec<int> TL, TR;
+     D.ToLeft(TL);
+     D.ToRight(TR);
+     const int K = hb.K();
+     int dleft, dright, ltrim, rtrim; bvec seqgap;
+     for(int i = 0; i < D.E(); i++){
+         if(D.O(i)[0]>-1) continue;
+         if(!IsSequence(D.O(i))) continue;
+         int v = TL[i], w = TR[i];
+         if (D.To(v).size()!=1 || D.From(w).size()!=1){
+             cout << "incorrect sequence gap topology" << endl;
+             Scram(0);
+         }
+         dleft = D.ITo(v,0); dright = D.IFrom(w,0);
+         GapToSeq(D.O(i), ltrim, rtrim, seqgap); 
+         // append extra base to left and right of seqgap
+         bvec tmp;
+         bvec lseq = hb.Cat(D.O(dleft));
+         bvec rseq = hb.Cat(D.O(dright));
+         tmp.push_back(lseq[lseq.size()-ltrim-K]);
+         tmp.append(seqgap);
+         tmp.push_back(rseq[rtrim+K-1]);
+         allx.push_back(tmp);
+     }
+     for(int i = 0; i < D.E(); i++){
+         if(D.O(i)[0]>-1) continue;
+         if(!IsCell(D.O(i))) continue;
+         cell c;
+         c.CellDecode(D.O(i));
+         auto& cD = c.G();
+         vec<int> tl, tr;
+         cD.ToRight(tr); cD.ToLeft(tl);
+         for(int d = 0; d < cD.E(); d++){
+             if(!IsSequence(cD.O(d))) continue;
+             int v = tl[d], w = tr[d];
+             if (cD.To(v).size()!=1 || cD.From(w).size()!=1){
+                 cout << "incorrect sequence gap topology" << endl;
+                 Scram(0);
+             }
+             dleft = cD.ITo(v,0); dright = cD.IFrom(w,0);
+             GapToSeq(cD.O(d), ltrim, rtrim, seqgap); 
+             // append extra base to left and right of seqgap
+             bvec tmp;
+             bvec lseq = hb.Cat(cD.O(dleft));
+             bvec rseq = hb.Cat(cD.O(dright));
+             tmp.push_back(lseq[lseq.size()-ltrim-K]);
+             tmp.append(seqgap);
+             tmp.push_back(rseq[rtrim+K-1]);
+             allx.push_back(tmp);
+         }
+     }
+}
+
 void BuildAll( vecbasevector& allx, const HyperBasevector& hb, const int64_t extra )
 {    size_t allxSize = hb.E( ) + extra;
      for ( auto itr=hb.To().begin(),end=hb.To().end(),itr2=hb.From().begin();
@@ -158,6 +213,59 @@ void BuildAll( vecbasevector& allx, const HyperBasevector& hb, const int64_t ext
                     tmp.assign(x1.end()-K,x1.end()).push_back(x2[K-1]);
                     allx.push_back(tmp);    }    }    }    }
 
+// This is a version of TranslatePaths that streams ReadPathVec from disk,
+// edits it, and then appends to a pathsX
+// Note that this truncates to length 1.
+
+void TranslatePaths( ReadPathVecX& pathsX, const HyperBasevectorX & hbx3, 
+     const vec<vec<int>>& to3, const vec<int>& left3, const String paths_file )
+{
+     cout << Date( ) << ": translating paths, mem = " << MemUsageGBString() << endl;
+     Destroy(pathsX);
+     VirtualMasterVec<ReadPath> vpaths( paths_file );
+     const int64_t N = vpaths.size();
+     #pragma omp parallel for ordered firstprivate( vpaths )
+     for ( int64_t i = 0; i < N; i++ )
+     {    
+          ReadPath p = vpaths[i];
+          SerfVec<int> q;
+          int trim = 0;
+          int e = -1;
+          int start = 0;
+
+          if ( p.size( ) == 0 ) goto add_path;
+          e = p[0];
+          start = p.getOffset( ) + left3[ e ];
+          if ( to3[e].empty( ) )
+          {    p.clear( );
+               goto add_path;   }
+     
+          if ( start < hbx3.Bases( to3[ e ][0] ) )
+          {    p.resize(1);
+               p[0] = to3[ e ][0];
+               p.setOffset(start);
+               goto add_path;    }
+
+          for ( int j = 0; j < (int) p.size( ); j++ )
+          {    if ( to3[ p[j] ].empty( ) ) break;
+               OverlapAppend( q, to3[p[j]] );    }
+          while( start >= hbx3.Bases( q[trim] ) )
+          {    start -= hbx3.Kmers( q[trim] );
+               trim++;
+               if ( trim == (int) q.size( ) ) break;    }
+
+          if ( trim == (int) q.size( ) )
+          {    p.clear( );
+               goto add_path;    }
+          p.resize(1);
+          p[0] = q[trim];
+          p.setOffset(start);
+add_path: 
+          #pragma omp ordered
+          { pathsX.append( p, hbx3 ); }
+          }    }
+
+// This is the old paths version
 // Note that this truncates to length 1.
 
 void TranslatePaths( ReadPathVec& paths2, const HyperBasevector& hb3,
@@ -363,6 +471,89 @@ void ExtendPath( ReadPath& p, const int64_t i, const HyperBasevector& hb,
                          break;    }    }
                if (mis) return;
                p.push_back( exts[0][j] );    }    }    }
+
+
+
+void ExtendPath( ReadPath& p, const int64_t i, const HyperBasevectorX& hb, 
+     const bvec& bases, const qvec& quals, const int min_gain, const Bool verbose,
+     const int mode )
+{    if ( p.size( ) == 0 ) return;
+     int K = hb.K( );
+     int start = p.getOffset( );
+     if ( start < 0 ) return;
+     int rstop = hb.Bases( p[0] ) - start;
+     for ( int j = 1; j < (int) p.size( ); j++ )
+          rstop += hb.Kmers( p[j] );
+     int ext = bases.isize( ) - rstop;
+     if ( ext <= 0 ) return;
+     int e = p.back( );
+     int v = hb.ToRight(e);
+     if ( hb.From(v).empty( ) ) return;
+     if (verbose)
+     {    cout << "\n[" << i << "] (" << start << ") " << printSeq(p)
+               << " -- extends " << ext << " bases" << endl;    }
+     vec<vec<int>> exts;
+     vec<int> exts_len;
+     exts.push_back( vec<int>( ) );
+     exts_len.push_back(0);
+     Bool fail = False;
+     const int max_exts = 100;
+     for ( int j = 0; j < exts.isize( ); j++ )
+     {    if ( j > max_exts )
+          {    fail = True;
+               if (verbose) cout << "too many extensions" << endl;
+               break;    }
+          if ( exts_len[j] >= ext ) continue;
+          int y;
+          if ( exts[j].size( ) > 0 ) y = hb.ToRight( exts[j].back( ) );
+          else y = v;
+          for ( int l = 0; l < (int) hb.From(y).size( ); l++ )
+          {    vec<int> e = exts[j];
+               int n = hb.IFrom( y, l );
+               e.push_back(n);
+               exts.push_back(e);
+               exts_len.push_back( exts_len[j] + hb.Kmers(n) );    }    }
+     if (fail) return;
+     vec<Bool> to_del( exts.size( ), False );
+     for ( int j = 0; j < exts.isize( ); j++ )
+          if ( exts_len[j] < ext ) to_del[j] = True;
+     EraseIf( exts, to_del );
+     EraseIf( exts_len, to_del );
+     if (verbose) PRINT( exts.size( ) );
+     if ( exts.empty( ) ) return;
+     int n = bases.size( );
+     basevector r( bases, n - ext, ext );
+     if (verbose) cout << "<0> " << r.ToString( ) << endl;
+     vec<int> qsum( exts.size( ), 0 );
+     for ( int j = 0; j < exts.isize( ); j++ )
+     {    const vec<int>& e = exts[j];
+          basevector b;
+          for ( int l = 0; l < e.isize( ); l++ )
+          {    b = Cat( b, basevector( hb.EdgeObject( e[l] ), K-1, 
+                    hb.Bases( e[l] ) - (K-1) ) );    }
+          for ( int m = 0; m < r.isize( ); m++ )
+               if ( r[m] != b[m] ) qsum[j] += quals[ n - ext + m ];
+          if (verbose)
+          {    cout << "<" << j+1 << "> " << b.ToString( ) 
+                    << ", qsum = " << qsum[j] << endl;    }    }
+     SortSync( qsum, exts );
+     if ( mode == 1 )
+     {    if ( exts.size( ) >= 2 && qsum[1] - qsum[0] < min_gain ) return;
+          for ( int j = 0; j < exts[0].isize( ); j++ )
+               p.push_back( exts[0][j] );    }
+     else // mode = 2
+     {    int m;
+          for ( m = 1; m < exts.isize( ); m++ )
+               if ( qsum[m] - qsum[0] >= min_gain ) break;
+          for ( int j = 0; j < exts[0].isize( ); j++ )
+          {    Bool mis = False;
+               for ( int l = 1; l < m; l++ )
+               {    if ( j >= exts[l].isize( ) || exts[l][j] != exts[0][j] )
+                    {    mis = True;
+                         break;    }    }
+               if (mis) return;
+               p.push_back( exts[0][j] );    }    }    }
+
 
 void ExtendPath2( ReadPath& p, const int64_t i, const HyperBasevector& hb, 
      const vec<int>& to_left, const vec<int>& to_right, const bvec& bases,

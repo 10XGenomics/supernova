@@ -166,32 +166,49 @@ private:
     KMerContext mContext;
 };
 
-template <unsigned K>
-class KmerDictEntry : public KMer<K>
+struct BCWrapper {
+     explicit BCWrapper(int32_t bc ) : mTempBC(bc) {};
+     BCWrapper() {};
+     int32_t getTempBC() const { return mTempBC; };
+     void setTempBC(int32_t bc) { mTempBC = bc; };
+     int32_t mTempBC;
+     friend ostream& operator<<( ostream& os, BCWrapper const& ent ) { 
+          if ( ent.getTempBC() > -1 ) os << "[" << ent.getTempBC() << "]";
+          return os;
+     };
+};
+
+struct BCEmpty {
+     explicit BCEmpty(int32_t bc) {};
+     BCEmpty() {};
+     int32_t getTempBC() const { FatalErr("BUG: empty base class used for barcode access"); };
+     void setTempBC(int32_t) {};
+     friend ostream& operator<<( ostream& os, BCEmpty const& ent ) { return os; };
+};
+
+template <unsigned K, typename Bcode = BCWrapper >
+class KmerDictEntry : public KMer<K>, public Bcode
 {
 public:
     KmerDictEntry() {}
     KmerDictEntry( KMer<K> const& kmer, KMerContext context, int32_t tempBC = -1 )
-    : KMer<K>(kmer), mKDef(context), mTempBC(tempBC) {}
+    : KMer<K>(kmer), Bcode(tempBC), mKDef(context) {}
     KmerDictEntry& operator=( KMer<K> const& kmer )
-    { static_cast<KMer<K>&>(*this) = kmer; mKDef = KDef(); mTempBC=-1; return *this; }
+    { static_cast<KMer<K>&>(*this) = kmer; mKDef = KDef(); this->setTempBC(-1); return *this; }
 
     // compiler-supplied copying and destructor are OK
 
     KDef& getKDef() { return mKDef; }
     KDef const& getKDef() const { return mKDef; }
-    int32_t getTempBC() { return mTempBC; }
 
     friend ostream& operator<<( ostream& os, KmerDictEntry const& ent )
     {
-         os << static_cast<KMer<K> const&>(ent) << ' ' << ent.getKDef();
-         if ( ent.mTempBC > -1 ) os << " [" << ent.mTempBC << "]";
+         os << static_cast<KMer<K> const&>(ent) << " " << ent.getKDef() << " " << ent.getTempBC();
          return os;
     }
 
 private:
     KDef     mKDef;
-    int32_t  mTempBC;
 };
 
 template <unsigned K>
@@ -201,11 +218,11 @@ struct Serializability< KmerDictEntry<K> >
 
 
 /// A set of KmerDictEntry's, used as a map from KMer onto KDef.
-template <unsigned K>
+template <unsigned K, typename Bcode = BCWrapper >
 class KmerDict
 {
 public:
-    typedef KmerDictEntry<K> Entry;
+    typedef KmerDictEntry<K, Bcode> Entry;
     typedef typename KMer<K>::Hasher Hasher;
     typedef std::equal_to<KMer<K> > Comparator;
     typedef HashSet<Entry,Hasher,Comparator> Set;

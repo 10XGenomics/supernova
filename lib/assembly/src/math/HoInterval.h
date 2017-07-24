@@ -28,7 +28,9 @@ class ho_interval {
      {    TestValid( );    }
                
      int Start( ) const { return start_; }
+     int& StartMutable( ) { return start_; }
      int Stop( ) const { return stop_; }
+     int& StopMutable( ) { return stop_; }
 
      int Length( ) const 
      {    ForceAssertLe( start_, stop_ );
@@ -45,6 +47,10 @@ class ho_interval {
      {    start_ += delta;    }
      void AddToStop( int delta )
      {    stop_ += delta;    }
+     void SubFromStart( int delta )
+     {    start_ -= delta;    }
+     void SubFromStop( int delta )
+     {    stop_ -= delta;    }
      void Shift( int delta )
      {    start_ += delta;
           stop_ += delta;    }

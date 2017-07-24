@@ -27,6 +27,7 @@ bool ValidateReadPath(const HyperBasevector& hbv, const vec<int>& to_left,
 
 bool ValidateAllReadPaths(const HyperBasevector& hbv, const ReadPathVec& readpaths );
 bool ValidateAllReadPaths(const HyperBasevector& hb, const ReadPathVecX& readpaths );
+bool ValidateAllReadPaths(const HyperBasevectorX& hb, const ReadPathVecX& readpaths );
 bool ValidateAllReadPaths(const HyperBasevector& hb, const HyperBasevectorX& hbx, const ReadPathVecX& readpaths );
 
 // Displays a path through the HBV given a list of edges and the start base on
