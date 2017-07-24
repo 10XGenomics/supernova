@@ -16,15 +16,13 @@
 #include "math/Functions.h"
 #include "paths/HyperBasevector.h"
 #include "paths/UnibaseUtils.h"
-#include "paths/long/BuildReadQGraph40.h"
 #include "paths/long/BuildReadQGraph48.h"
-#include "paths/long/BuildReadQGraph60.h"
 #include "paths/long/ReadPath.h"
 #include "paths/long/SupportedHyperBasevector.h"
 #include "paths/long/large/Repath.h"
 #include "system/HostName.h"
 #include "10X/Closomatic.h"
-#include "10X/ClosuresToGraph.h"
+#include "10X/mergers/ClosuresToGraph.h"
 #include "10X/DfTools.h"
 #include "10X/Extend.h"
 #include "10X/Heuristics.h"
@@ -55,19 +53,22 @@ void StageTrim( HyperBasevectorX& hb, HyperBasevector& hbv, vec<int>& inv,
           ReadPathVecX& paths, String paths_index_file, String countsb_file, 
           vec<int32_t>& bc);
 
-void StageExtension( HyperBasevector& hbv, vec<int>& inv,
+void StageExtension( const HyperBasevectorX& hb, vec<int>& inv,
           vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
           ReadPathVecX& paths, Bool const BACK_EXTEND );
 
-void StagePatch(String const& dir, int const K, vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
-          HyperBasevector& hbv, HyperBasevectorX& hb, ReadPathVec& paths,
+void StageFindPatch(String const& dir, int const K, vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
+          HyperBasevector& hbv, HyperBasevectorX& hb, ReadPathVecX & pathsX,
           String pi_file, vec<int>& inv, const vec<Bool>& dup,
           vec<Bool>& bad, vec<DataSet>& datasets,
           vec<int32_t>& bc, const int max_width, Bool ONE_GOOD, vec<basevector>& closures,
           vec<pair<int,int>>& pairs, Bool const CG2, const Bool STACKSTER,
           const Bool STACKSTER_ALT, const Bool RESCUE );
 
-void StageBuildGraph( int const K, vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
+void StageInsertPatch(String const& dir, int const K, HyperBasevector& hbv, 
+          vec<int>& inv, ReadPathVecX& pathsX, vec<basevector>& closures);
+
+void StageBuildGraph( String const& MSPEDGES, int const K, vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
           int MIN_QUAL, int MIN_FREQ, int MIN_BC, vec<int32_t> const& bc, int64_t bc_start,
           std::string const GRAPH, double const GRAPHMEM,
           String const& work_dir, String const& read_head, HyperBasevector& hbv, ReadPathVec& paths, vec<int>& inv);

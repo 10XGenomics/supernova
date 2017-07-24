@@ -187,6 +187,8 @@ public:
 
     void doLeakReport( bool doLeakReport ) { mDoLeakReport = doLeakReport; }
 
+    static bool doesInstanceExist() { return gpInstance != nullptr; }
+
 private:
     MempoolFinder() : mNextPool(1), mDoLeakReport(true)
     { mMempools[0].setChunkSize(0);

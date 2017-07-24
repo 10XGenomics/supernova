@@ -979,4 +979,7 @@ int Glob( const String& x, vector<String>& xs );
 Bool WeAreTrackingSomeMemory( );
 void DeclareThatWeAreTrackingSomeMemory( );
 
+// returns -1 on error or count of open files for this process
+int32_t NumOpenFiles();
+
 #endif

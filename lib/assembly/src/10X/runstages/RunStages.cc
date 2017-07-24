@@ -5,8 +5,9 @@
 #include "10X/Super.h"
 #include "10X/Rescue.h"
 #include "10X/PathsIndex.h"
-#include "10X/ClosuresToGraph.h"
+#include "10X/mergers/ClosuresToGraph.h"
 #include "10X/paths/ReadPathVecX.h"
+#include "paths/long/HBVFromEdges.h"
 
 void StageClosures(HyperBasevectorX& hb, vec<int>& inv, ReadPathVecX& paths,
           String paths_index_file, vec<Bool>& dup, vec<Bool>& bad,
@@ -19,6 +20,7 @@ void StageClosures(HyperBasevectorX& hb, vec<int>& inv, ReadPathVecX& paths,
      
      VecULongVec paths_index;
      MakeClosures( hb, inv, paths, paths_index, dup, bad, all_closures, True, paths_index_file );
+     Destroy(paths);
      MEM(before_closures_to_graph);
      ClosuresToGraph( hb, inv, all_closures, D, dinv, True, fin_dir );
      Validate( hb, inv, D, dinv );
@@ -94,6 +96,8 @@ void StageTrim( HyperBasevectorX& hb, HyperBasevector& hbv, vec<int>& inv,
      // compute number of threads based on available memory
      const int T = Max(int(1), Min( int(omp_get_max_threads()), int(MemAvailable( 0.9 ) / (4*hb.E( )) - 1) ) );
      cout << "using " << T << " thread(s)" << endl;
+     cout << Date( ) << ": mem = " << MemUsageGBString( )
+          << ", peak = " << PeakMemUsageGBString( ) << endl;
      vec <vec<int>> rsb( T, vec<int>( hb.E( ), 0 ) );
      const int64_t rbatch = rpaths.size()/T+1;
      #pragma omp parallel for num_threads(T)
@@ -114,7 +118,9 @@ void StageTrim( HyperBasevectorX& hb, HyperBasevector& hbv, vec<int>& inv,
                rs[e] += rsb[t][e];
      }
      }
-     cout << Date( ) << ": finding hanging ends" << endl;
+     cout << Date( ) << ": finding hanging ends, mem = " 
+          << MemUsageGBString( ) << ", peak = "
+          << PeakMemUsageGBString( ) << endl;
      // Let's kill some hanging ends.
      // Warning:: if you want to use paths_index here, you have to 
      // recompute it since the graph was modified above.
@@ -123,8 +129,7 @@ void StageTrim( HyperBasevectorX& hb, HyperBasevector& hbv, vec<int>& inv,
      {    int re = inv[e];
           //if ( in_dels[e] ) continue; //already deleted in MowLawn
           
-          if ( rs[e] > 0 )
-               continue;
+          if ( rs[e] > 0 ) continue;
           
           if ( hb.Kmers(e) > 200 ) continue; // not thought out!!
           
@@ -139,7 +144,8 @@ void StageTrim( HyperBasevectorX& hb, HyperBasevector& hbv, vec<int>& inv,
      cout << Date( ) << ": deleting " << dels.size( ) << " total edges"
           << endl;
      hbv.DeleteEdgesParallel(dels);
-     cout << Date( ) << ": cleaning up" << endl;
+     cout << Date( ) << ": cleaning up, mem = " << MemUsageGBString( ) 
+          << ", peak = " << PeakMemUsageGBString( ) << endl;
      Cleanup( hbv, inv, rpaths );
      // NOTE EXPENSIVE CONVERSION !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
      hb = HyperBasevectorX(hbv);
@@ -150,7 +156,7 @@ void StageTrim( HyperBasevectorX& hb, HyperBasevector& hbv, vec<int>& inv,
 }
 
 
-void StageExtension( HyperBasevector& hbv, vec<int>& inv,
+void StageExtension( const HyperBasevectorX& hb, vec<int>& inv,
           vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
           ReadPathVecX& paths, Bool const BACK_EXTEND )
 {
@@ -160,16 +166,72 @@ void StageExtension( HyperBasevector& hbv, vec<int>& inv,
      VirtualMasterVec<PQVec> vquals(quals_om.filename());
      cout << "Stage Extension, quals loaded, now current mem = " << MemUsageGBString( ) << endl;
      cout << "paths size before ExtendPathsNew " << paths.SizeSum() << endl;
-     ExtendPathsNew( hbv, inv, bases, vquals, paths, BACK_EXTEND );
+     ExtendPathsNew( hb, inv, bases, vquals, paths, BACK_EXTEND );
      cout << "Stage Extension, paths extended, now current mem = " << MemUsageGBString( ) << endl;
      cout << "paths size after ExtendPathsNew " << paths.SizeSum() << endl;
      quals_om.unload();
      cout << "after quals unload now current mem = " << MemUsageGBString( ) << endl;
 }
 
-void StagePatch(String const& dir, int const K, vecbasevector& bases, 
+void StageInsertPatch(String const& dir, int const K, HyperBasevector& hbv, 
+           vec<int>& inv, ReadPathVecX& pathsX, vec<basevector>& closures)
+{
+     // Insert gap patches into assembly.
+     ForceAssertEq( K, hbv.K( ) );
+     HyperBasevector hb3;
+     vec<vec<int>> to3;
+     vec<int> left3;
+
+     // only need closures, K, coverage, hb3 at this point
+     MEM(start_build); 
+     {    ReadPathVec allx_paths;
+          vecbasevector allx;
+          BuildAll( allx, hbv, closures.size( ) );
+          MEM(build_all);
+          allx.append( closures.begin( ), closures.end( ) );
+
+          cout << Date( ) << ": destroying closures, mem = "
+               << MemUsageGBString( ) << endl;
+          Destroy(closures);
+
+          cout << Date( ) << ": building hb2" << endl;
+          cout << "memory in use now = "
+               << ToStringAddCommas( MemUsageBytes( ) ) << endl;
+          double clock2 = WallClockTime( );
+          const int coverage = 4;
+          MEM(start_build_big);
+          buildBigKHBVFromReads_sleek( K, allx, coverage, &hb3, &allx_paths);
+          MEM(build_big);
+          cout << Date( ) << ": back from buildBigKHBVFromReads" << endl;
+
+          // build to3 and left3 from allx_paths
+          to3.resize( hbv.E( ) );
+          left3.resize( hbv.E( ) );
+
+          for ( int i = 0; i < hbv.E( ); ++i )
+          {    for ( auto const& p : allx_paths[i] )
+                    to3[i].push_back( p );
+               left3[i] = allx_paths[i].getFirstSkip();    }
+
+          cout << TimeSince(clock2) << " used in new stuff 2 test" << endl;    }
+
+     cout << "mem use = " << MemUsageGBString() << ", peak mem usage = "
+          << PeakMemUsageGBString( ) << endl;
+
+     double clock3 = WallClockTime( );
+     {
+          HyperBasevectorX hbx3 = HyperBasevectorX( hb3 );
+          TranslatePaths( pathsX, hbx3, to3, left3, dir + "/a.paths" );
+          cout << Date( ) << ": done translating, mem = " << MemUsageGBString() << endl;
+     }
+     Destroy(to3), Destroy(left3);
+     hbv = hb3;
+     hbv.Involution(inv);
+}
+
+void StageFindPatch(String const& dir, int const K, vecbasevector& bases, 
           ObjectManager<VecPQVec>& quals_om, HyperBasevector& hbv, 
-          HyperBasevectorX& hb, ReadPathVec& paths, String pi_file,
+          HyperBasevectorX& hb, ReadPathVecX & pathsX, String pi_file,
           vec<int>& inv, const vec<Bool>& dup, vec<Bool>& bad, 
           vec<DataSet>& datasets, vec<int32_t>& bc, const int max_width, 
           Bool ONE_GOOD, vec<basevector>& closures, vec<pair<int,int>>& pairs, 
@@ -186,8 +248,9 @@ void StagePatch(String const& dir, int const K, vecbasevector& bases,
      MEM(hbv_copy);
 
      // Rescue kmers.
-
-     if (RESCUE) Rescue( 0, bases, bc, datasets, hb, inv, paths, closures );
+     // We are not doing this any more, there's a separate piece of code
+     // that we could run. 
+     //if (RESCUE) Rescue( 0, bases, bc, datasets, hb, inv, paths, closures );
 
      // Proceed with the rest of the patching.
 
@@ -195,19 +258,18 @@ void StagePatch(String const& dir, int const K, vecbasevector& bases,
      quals_om.unload();
 //     VecPQVec& quals = quals_om.load_mutable( );
 //     MarkBads( hb, bases, quals, paths, bad );
-     MarkBads( hb, bases, vmv, paths, bad );
+     MarkBads( hb, bases, vmv, pathsX, bad );
 
      // Look for edge pairs that we should try to close.
      cout << Date( ) << ": finding edge pairs" << endl;
      FindEdgePairs(
-          hb, inv, paths, pi_file, bad, pairs, datasets, bc, ONE_GOOD );
+          hb, inv, pathsX, pi_file, bad, pairs, datasets, bc, ONE_GOOD );
      MEM(edge_pairs);
 
      // Determine which read ids will be used
 
      cout << Date() << ": determining subset of interest" << endl;
      vec<uint64_t> read_ids;
-#if 1
      vec<bool> in_pairs( hbv.E( ), false);
      for ( auto & p : pairs ) {
           in_pairs[p.first]=true;
@@ -223,53 +285,51 @@ void StagePatch(String const& dir, int const K, vecbasevector& bases,
                eoi.push_back(e);
      }
 
-     for ( uint64_t id = 0; id < paths.size(); id++ ) {
-          for ( auto e : paths[id] ) {
-               if ( in_pairs[e] ) {
-                    read_ids.push_back( id );
-                    if ( id % 2 == 0 ) {
-                         id++; //no need to go to the pair again
-                         read_ids.push_back( id );
-                    } else
-                         read_ids.push_back( id-1 );
-                    break;
+     {    // Block to kill choose
+          int64_t nrp = pathsX.size()/2;
+          vec<Bool> choose (nrp, False );
+          #pragma omp parallel for schedule (dynamic,1)
+          for ( int64_t id1 = 0; id1 < pathsX.size(); id1+=2 ) {
+               const int64_t pid = id1/2;
+               ReadPath p;
+               pathsX.unzip( p, hb, id1 );
+               for ( auto e : p ) {
+                    if ( in_pairs[e] ) {
+                         choose[pid] = True;
+                         break;
+                    }
+               }
+               if ( choose[pid] ) continue;
+               p.clear();
+               pathsX.unzip( p, hb, id1+1 );
+               for ( auto e : p ) {
+                    if ( in_pairs[e] ) {
+                         choose[pid] = True;
+                         break;
+                    }
+               }
+          }
+          for ( int64_t pid = 0; pid < nrp; pid++ ) {
+               if ( choose[pid] ) {
+                    read_ids.push_back( 2*pid );
+                    read_ids.push_back( 2*pid+1 );
                }
           }
      }
-     ParallelSort( read_ids ); 
-#else
-     for (size_t i = 0; i < paths.size(); ++i )   // make this a NO-OP for testing
-          read_ids.push_back(i);
-#endif
      cout << Date() << ": subset is size " << read_ids.size() << endl;
 
-     cout << Date() << ": Destroying paths and populating subsets from disk" << endl;
-     Destroy(paths);
-     MEM(destroy_paths);
+     cout << Date() << ": Destroying pathsX and populating subsets from disk" << endl;
+     Destroy(pathsX);
+     MEM(destroy_pathsX);
 
      SubsetMasterVec<PQVec> quals_subset( quals_om.filename(), read_ids );
      SubsetMasterVec<ReadPath> paths_subset( dir+"/a.paths", read_ids );
      SubsetMasterVec<ULongVec> paths_index_subset( pi_file, eoi );
 
      MEM(after_populate_subset);
-
-#if 0
-     // TEMP - check that the NO-OP worked
-     cout << Date() << ": checking paths and quals" << endl;
-     ForceAssertEq(quals_subset.size(), quals.size() );
-     ForceAssertEq(paths_subset.size(), paths.size() );
-     for ( size_t i = 0; i < quals_subset.size(); ++i ) {
-          if ( paths_subset[i] !=  paths[i] ) FatalErr( "paths bad" );
-          for ( size_t j = 0; j < quals_subset[i].size(); ++j )  {
-               qualvector q1, q2;
-               quals_subset[i].unpack(&q1);
-               quals[i].unpack(&q2);
-               if ( q1 != q2 ) FatalErr("quals bad" );
-          }
-     }
-     cout << Date() << ": done checking paths and quals" << endl;
-#endif
-
+     Destroy( read_ids );
+     Destroy( eoi );
+     MEM(after_destroy_aux_data_structures);
 
      // Traverse pairs.
 
@@ -325,55 +385,11 @@ void StagePatch(String const& dir, int const K, vecbasevector& bases,
      // cout << Date( ) << ": sorting closures" << endl;
      // ParallelSort(closures);
 
-     // Insert gap patches into assembly.
-
-     ForceAssertEq( K, hbv.K( ) );
-     HyperBasevector hb3;
-     vec<vec<int>> to3( hbv.E( ) );
-     vec<int> left3( hbv.E( ) );
-
-     MEM(start_build);
-     {    ReadPathVec allx_paths;
-          vecbasevector allx;
-          BuildAll( allx, hbv, closures.size( ) );
-          MEM(build_all);
-          allx.append( closures.begin( ), closures.end( ) );
-          cout << Date( ) << ": building hb2" << endl;
-          cout << "memory in use now = "
-               << ToStringAddCommas( MemUsageBytes( ) ) << endl;
-          double clock2 = WallClockTime( );
-          const int coverage = 4;
-          MEM(start_build_big);
-          buildBigKHBVFromReads( K, allx, coverage, &hb3, &allx_paths );
-          MEM(build_big);
-          cout << Date( ) << ": back from buildBigKHBVFromReads" << endl;
-
-          // build to3 and left3 from allx_paths
-
-          for ( int i = 0; i < hb.E( ); ++i )
-          {    for ( auto const& p : allx_paths[i] )
-                    to3[i].push_back( p );
-               left3[i] = allx_paths[i].getFirstSkip();    }
-
-          cout << TimeSince(clock2) << " used in new stuff 2 test" << endl;    }
-
-     cout << "peak mem usage = " << PeakMemUsageGBString( ) << endl;
-     MEM(before_load_paths);
-     paths.ReadAll( dir + "/a.paths" );
-     MEM(load_paths);
-     double clock3 = WallClockTime( );
-     TranslatePaths( paths, hb3, to3, left3 );
-     Destroy(to3), Destroy(left3);
-     hbv = hb3;
-     hbv.Involution(inv);
-     Validate( hbv, paths );
-
 }
 
 
 
-
-void StageBuildGraph( int const K, vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
+void StageBuildGraph( String const& MSPEDGES, int const K, vecbasevector& bases, ObjectManager<VecPQVec>& quals_om,
           int MIN_QUAL, int MIN_FREQ, int MIN_BC, vec<int32_t> const& bc, int64_t bc_start,
           std::string const GRAPH, double const GRAPHMEM,
           String const& work_dir, String const& read_head, HyperBasevector& hbv, ReadPathVec& paths, vec<int>& inv)
@@ -384,8 +400,18 @@ void StageBuildGraph( int const K, vecbasevector& bases, ObjectManager<VecPQVec>
 
      MEM(before_graph_creation);
      if ( K != 48 ) FatalErr("remember that we have changes for K=48 not propagated to other K values.");
-     buildReadQGraph48(work_dir, read_head, GRAPH, bases, quals_om, False, False, MIN_QUAL, MIN_FREQ, bc_start, MIN_BC, &bc,
+
+     if (MSPEDGES=="") {
+          buildReadQGraph48(work_dir, read_head, GRAPH, bases, quals_om, False, False, MIN_QUAL, MIN_FREQ, bc_start, MIN_BC, &bc,
                               .75, 0, "", True, False, &hbv, &paths, GRAPHMEM, False );
+     } else {
+          Destroy(bases);
+          MEM(after_destroy_bases);
+          quals_om.unload();
+          MEM(after_quals_unload);
+          buildGraphFromMSP( work_dir, work_dir+read_head+".fastb", quals_om.filename(), MSPEDGES, hbv, K, paths );
+     }
+
      cout << Date( ) << ": back from buildReadQGraph" << endl;
      cout << Date( ) << ": memory in use = " << MemUsageGBString( )
           << ", peak = " << PeakMemUsageGBString( ) << endl;

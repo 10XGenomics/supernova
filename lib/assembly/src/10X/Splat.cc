@@ -16,60 +16,12 @@
 #include "10X/Super.h"
 
 void Splat( const HyperBasevectorX& hb, const vec<int>& inv,
-     const vecbasevector& closures, digraphE<vec<int>>& D, vec<int>& dinv )
+     const vec<vec<int>> & cpaths, digraphE<vec<int>>& D, vec<int>& dinv )
 {
      // Check K.
 
      const int K = 48;
      ForceAssertEq( K, hb.K( ) );
-
-     // Path the closures.
-
-     vec<vec<int>> cpaths;
-     {    cout << Date( ) << ": making lookup table, mem usage = " 
-               << MemUsageGBString( ) << endl;
-          vec< triple<kmer<K>,int,int> > kmers_plus;
-          // MakeKmerLookup0( hb.Edges( ), kmers_plus );
-          MakeKmerLookup0x( hb.Edges( ), kmers_plus ); // slower but less mem
-          cout << Date( ) << ": pathing " << ToStringAddCommas( closures.size( ) )
-               << " closures" << endl;
-          cpaths.resize( 2 * closures.size( ) );
-          #pragma omp parallel for schedule( dynamic, 1000 )
-          for ( int c = 0; c < (int) closures.size( ); c++ )
-          {    const basevector& C = closures[c];
-               if ( C.isize( ) < K ) continue;
-               kmer<K> x;
-               Bool fail = False;
-               vec< pair<int,int> > X( C.isize( ) - K + 1 );
-               for ( int j = 0; j <= C.isize( ) - K; j++ )
-               {    x.SetToSubOf( C, j );
-                    int64_t p = BinPosition1( kmers_plus, x );
-                    if ( p < 0 )
-                    {    fail = True;
-                         break;    }
-                    X[j] = make_pair( 
-                         kmers_plus[p].second, kmers_plus[p].third );    }
-               if (fail) continue;
-               vec<int> es = { X[0].first };
-               for ( int j = 1; j < X.isize( ); j++ )
-               {    int e = X[j].first, ep = X[j-1].first;
-                    if ( e == ep && X[j].second == X[j-1].second + 1 );
-                    else if ( X[j].second == 0 && X[j-1].second == hb.Kmers(ep) - 1
-                         && hb.ToRight(ep) == hb.ToLeft(e) )
-                    {    es.push_back(e);    }
-                    else
-                    {    fail = True;
-                         break;   }   }
-               if (fail) continue;
-               cpaths[2*c] = es;
-               es.ReverseMe( );
-               for ( int i = 0; i < es.isize( ); i++ )
-                    es[i] = inv[ es[i] ];
-               cpaths[2*c+1] = es;    }    }
-     cout << Date( ) << ": sorting, mem usage = " << MemUsageGBString( ) << endl;
-     ParallelUniqueSort(cpaths);
-     cout << Date( ) << ": have " << ToStringAddCommas( cpaths.size( ) ) 
-          << " closure paths" << endl;
 
      // Index the closure paths.
 

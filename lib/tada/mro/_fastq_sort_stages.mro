@@ -1,0 +1,39 @@
+#
+# Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
+#
+
+filetype txt;
+
+filetype fastq;
+filetype fastq.gz;
+
+filetype rsd;
+
+
+stage BUCKET_FASTQS(
+    in  txt     barcode_whitelist_path,
+    in  int     trim_length,
+    in  map[]   chunks,
+    in  float   max_expected_barcode_errors,
+    in  float   bc_confidence_threshold,
+    in  int     requested_read_pairs,
+    out int     total_reads,
+    out float   final_subsample_rate,
+    out rsd[]   no_bc_read_buckets,
+    out rsd[]   read_buckets,
+    out rsd     bc_counts,
+    src exec    "tada martian bucket-bcs",
+) split using (
+    in int which,
+)
+
+stage SORT_FASTQS(
+    in  txt     barcode_whitelist_path,
+    in rsd[]  read_buckets,
+    in float  subsample_rate,
+    out fastq.gz[] reads,
+    src exec    "tada martian sort-bcs",
+) split using (
+    in int chunk_id,
+    in int total_chunks,
+)

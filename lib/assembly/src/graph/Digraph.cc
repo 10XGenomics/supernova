@@ -20,6 +20,31 @@
 #include "graph/Digraph.h"
 #include "math/Functions.h"
 
+Bool digraph::HavePath( const int v, const int w ) const
+{    vec<int> x, y;
+     GetSuccessors1( v, x );
+     GetPredecessors1( w, y );
+     return Meet( x, y );    }
+
+Bool digraph::IsSimpleLine( ) const
+{    if ( N( ) == 1 && From(0).empty( ) && To(0).empty( ) ) return True;
+     vec<Bool> used( N( ), False );
+     for ( int v = 0; v < N( ); v++ )
+     {    if ( To(v).nonempty( ) ) continue;
+          used[v] = True;
+          if ( !From(v).solo( ) ) return False;
+          v = From(v)[0];
+          used[v] = True;
+          while(1)
+          {    if ( !To(v).solo( ) ) return False;
+               if ( From(v).empty( ) ) return N( ) == Sum(used);
+               if ( !From(v).solo( ) ) return False;
+               if ( v == From(v)[0] ) return False;
+               v = From(v)[0];
+               used[v] = True;    }
+          return False;    }
+     return False;    }
+
 void digraph::FindSimpleLines( vec<vec<int>>& lines ) const
 {    lines.clear( );
      vec<Bool> used( N( ), False );
@@ -358,9 +383,15 @@ void digraph::DOT( ostream& out, const vec< vec<String> >& edge_labels,
 
 void digraph::DOT( ostream& out, const vec< vec<String> >& edge_labels,
      const vec<String>& vertex_colors, const vec<vec<String>>& edge_colors, 
-     const vec<vec<String>>& edge_attrs,
-     const vec<vec<String>>& legends, const vec<String>& legend_colors ) const
-{    PrintStandardDOTHeader(out);
+     const vec<vec<String>>& edge_attrs, const vec<vec<String>>& edge_attrs2,
+     const vec<vec<String>>& legends, const vec<String>& legend_colors,
+     const String& layout ) const
+{    out << "digraph G {\n\n";
+     out << "rankdir=LR;\n";
+     out << "node [width=0.1,height=0.1,fontsize=10,shape=point,"
+          << "margin=\"0.05,0.045\"];\n";
+     out << "edge [fontsize=12];\n";
+     if ( layout != "" ) out << "layout=" << layout << ";\n";
      for ( int v = 0; v < N( ); v++ )
      {    if ( vertex_colors[v].size( ) > 0 )
                out << v << "[color=" << vertex_colors[v] << "];\n";
@@ -369,6 +400,7 @@ void digraph::DOT( ostream& out, const vec< vec<String> >& edge_labels,
                const String& label = edge_labels[v][j];
                const String& color = edge_colors[v][j];
                const String& attr = edge_attrs[v][j];
+               const String& attr2 = edge_attrs2[v][j];
                if ( label.size( ) > 0 )
                {    String ename = "E_" + ToString(v) + "_" + ToString(j);
                     out << "\n" << ename;
@@ -377,12 +409,26 @@ void digraph::DOT( ostream& out, const vec< vec<String> >& edge_labels,
                     if ( attr != "" ) out << "," << attr;
                     out << "]";
                     out << ";\n" << v << " -> " << ename << " [arrowhead=none";
+                    if ( attr2 != "" ) out << "," << attr2;
                     if ( color != "" ) out << ",color=" << color;
                     out << "];\n";
                     out << ename << " -> " << w;
-                    if ( color != "" ) out << "[color=" << color << "]";
+                    if ( color != "" || attr2 != "" )
+                    {    out << "[";
+                         if ( color != "" ) out << "color=" << color;
+                         if ( color != "" && attr2 != "" ) out << ",";
+                         if ( attr2 != "" ) out << attr2;
+                         out << "]";    }
                     out << ";\n";    }
-               else out << "\n" << v << " -> " << w << ";\n";    }    }
+               else 
+               {    out << "\n" << v << " -> " << w;
+                    if ( color != "" || attr2 != "" )
+                    {    out << "[";
+                         if ( color != "" ) out << "color=" << color;
+                         if ( color != "" && attr2 != "" ) out << ",";
+                         if ( attr2 != "" ) out << attr2;
+                         out << "]";    }
+                    out << ";\n";    }    }    }
      PrintDotLegends( out, legends, legend_colors );
      out << "\n}\n";    }
 
@@ -899,13 +945,61 @@ template void digraphE<int>::AllPathsFixedLength(
      int v, int w, int L, vec< vec<int> >& paths ) const;
 
 template<class E> Bool digraphE<E>::AllPathsLengthRange( int v, int w, int L1, 
-     int L2, const vec<int>& to_right, vec< vec<int> >& paths, int max_paths,
-     int max_loops, const Bool no_dups ) const
+     int L2, const vec<int>& to_left, const vec<int>& to_right, 
+     vec< vec<int> >& paths, int max_paths, int max_loops, const Bool no_dups, 
+     const int max_copies ) const
 {    paths.clear( );
      if ( L2 < L1 ) return True;
+
+     // Find all edges that are to the right of v, and whose left end is at 
+     // distance <= L2 from it.
+
+     map<int,int> c1;
+     vec<pair<int,int>> Q;
+     for ( int i = 0; i < From(v).isize( ); i++ ) Q.push( IFrom(v,i), 0 );
+     int loopcount = 0;
+     while( Q.nonempty( ) )
+     {    if ( max_loops > 0 && loopcount++ > max_loops ) return False;
+          int e = Q.back( ).first, d = Q.back( ).second;
+          Q.pop_back( );
+          if ( c1.find(e) == c1.end( ) || d < c1[e] ) 
+          {    c1[e] = d;
+               int d2 = d + O(e);
+               if ( d2 <= L2 )
+               {    int x = to_right[e];
+                    for ( int i = 0; i < From(x).isize( ); i++ )
+                         Q.push( IFrom(x,i), d2 );    }    }    }
+
+     // Now find all edges that are to the left of w, and whose right end is at
+     // distance <= L2 from it.
+
+     map<int,int> c2;
+     Q.clear( );
+     for ( int i = 0; i < To(w).isize( ); i++ ) Q.push( ITo(w,i), 0 );
+     while( Q.nonempty( ) )
+     {    if ( max_loops > 0 && loopcount++ > max_loops ) return False;
+          int e = Q.back( ).first, d = Q.back( ).second;
+          Q.pop_back( );
+          if ( c2.find(e) == c2.end( ) || d < c2[e] ) 
+          {    c2[e] = d;
+               int d2 = d + O(e);
+               if ( d2 <= L2 )
+               {    int x = to_left[e];
+                    for ( int i = 0; i < To(x).isize( ); i++ )
+                         Q.push( ITo(x,i), d2 );    }    }    }
+
+     // Find the edges in both sets.
+
+     vec<int> x1, x2;
+     for ( auto m = c1.begin( ); m != c1.end( ); m++ ) x1.push_back(m->first);
+     for ( auto m = c2.begin( ); m != c2.end( ); m++ ) x2.push_back(m->first);
+     Sort(x1), Sort(x2);
+     vec<int> I = Intersection( x1, x2 );
+
+     // Now start the main search.
+
      vec< vec<int> > partials;
      partials.push_back( vec<int>( ) );
-     int loopcount = 0;
      while( partials.nonempty( ) )
      {    if ( max_loops > 0 && loopcount++ > max_loops ) return False;
           vec<int> p = partials.back( );
@@ -922,8 +1016,20 @@ template<class E> Bool digraphE<E>::AllPathsLengthRange( int v, int w, int L1,
                {    int e = EdgeObjectIndexByIndexFrom( vn, j );
                     if ( l + EdgeObject(e) > L2 ) continue;
                     if ( no_dups && Member( p, e ) ) continue;
+                    if ( !BinMember( I, e ) ) continue;
                     vec<int> p2 = p;
                     p2.push_back(e);
+                    if ( max_copies > 0 )
+                    {    vec<int> q(p2);
+                         Sort(q);
+                         Bool fail = False;
+                         for ( int r = 0; r < q.isize( ); r++ )
+                         {    int s = q.NextDiff(r);
+                              if ( s - r > max_copies )
+                              {    fail = True;
+                                   break;    }
+                              r = s - 1;    }
+                         if (fail) continue;    }
                     partials.push_back(p2);    }    }    }
      return True;    }
 
@@ -962,8 +1068,9 @@ template<class E> Bool digraphE<E>::AllPathsLengthRangeAlt( int v, int w,
      return True;    }
 
 template Bool digraphE<int>::AllPathsLengthRange( int v, int w, int L1, 
-     int L2, const vec<int>& to_right, vec< vec<int> >& paths, int max_paths,
-     int max_loops, const Bool no_dups ) const;
+     int L2, const vec<int>& to_left, const vec<int>& to_right, 
+     vec< vec<int> >& paths, int max_paths,
+     int max_loops, const Bool no_dups, const int ) const;
 
 template Bool digraphE<int>::AllPathsLengthRangeAlt( int v, int w, int L1, 
      int L2, const vec<int>& to_right, vec< vec<int> >& paths, int max_paths,
@@ -1672,6 +1779,16 @@ template Bool digraphE< vec<int> >::EdgePathsLim( const vec<int>&, const vec<int
      const int, const int, const int, vec< vec<int> >&, const int, const int,
      const int ) const;
 template vec<int>& digraphE<vec<int>>::EdgeObjectMutable( int i );
+template void digraphE<vec<int>>::SplayVertexWithUpdate(
+          const int v, vec<int>& to_left, vec<int>& to_right );
+template void digraphE<int>::DeleteEdgesAtVertex(int);
+
+template const pair<int,int>& digraphE<pair<int,int>>::EdgeObject(int) const;
+
+template int digraphE<int>::IGoes(int, int) const;
+template const int& digraphE<int>::OGoes(int, int) const;
+
+template const int& digraphE<int>::OFrom(int, int) const;
 
 // THIS DOESN'T BELONG HERE:
 

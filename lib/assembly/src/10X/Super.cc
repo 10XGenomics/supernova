@@ -20,6 +20,9 @@
 #include "10X/PlaceReads.h"
 #include "10X/PullApart.h"
 #include "10X/Super.h"
+#include "10X/mergers/EdgeSupport.h"
+
+Bool STRONG_VALIDATE;
 
 void BucketLines( const vec<vec<vec<vec<int>>>>& dlines, const vec<int>& llens,
      vec<vec<int>>& buckets, const int min_len )
@@ -154,12 +157,12 @@ void FindMoleculesOnLines(    vec<vec<vec<vec<int>>>>& dlines,
 
 void LineCN( const vec<int>& kmers, const MasterVec<SerfVec<pair<int,int>>>& lbp,
      const digraphE<vec<int>>& D, const vec<vec<vec<vec<int>>>>& dlines, 
-     const vec<int>& llens, vec<double>& COV )
+     const vec<int>& llens, vec<double>& COV, const Bool verbose )
 {
      // Test for broken input.
 
      int num_lines = dlines.size();
-     StatLogger::issue_alert("num_lines", num_lines);
+     if (verbose) StatLogger::issue_alert("num_lines", num_lines);
 
      // Heuristics.
 
@@ -175,7 +178,7 @@ void LineCN( const vec<int>& kmers, const MasterVec<SerfVec<pair<int,int>>>& lbp
      // [p-f,p) and (p,p+f].  Let cov(f) be the mean over all points p on the line 
      // (excluding the two ends of length f).
 
-     cout << Date( ) << ": finding bridging" << endl;
+     if (verbose) cout << Date( ) << ": finding bridging" << endl;
      vec<int> flanks = {FLANK_MIN};
      while( flanks.back( ) < FLANK_MAX ) 
           flanks.push_back( flanks.back( ) * FLANK_MUL );
@@ -215,7 +218,7 @@ void LineCN( const vec<int>& kmers, const MasterVec<SerfVec<pair<int,int>>>& lbp
      // flank and computing the normalized bounded physical coverage relative to
      // that flank.
 
-     cout << Date( ) << ": computing copy number" << endl;
+     if (verbose) cout << Date( ) << ": computing copy number" << endl;
      COV.resize_and_set( dlines.size( ), -1 );
      #pragma omp parallel for schedule(dynamic, 1000)
      for ( int64_t l = 0; l < dlines.jsize( ); l++ )
@@ -228,28 +231,29 @@ void LineCN( const vec<int>& kmers, const MasterVec<SerfVec<pair<int,int>>>& lbp
 
      // Assay behavior, informational only.
 
-     for ( int pass = 1; pass <= 3; pass++ )
-     {    int MIN_REP, MAX_REP;
-          if ( pass == 1 ) { MIN_REP = 20000, MAX_REP = 50000; }
-          if ( pass == 2 ) { MIN_REP = 50000, MAX_REP = 100000; }
-          if ( pass == 3 ) { MIN_REP = 100000, MAX_REP = 1000000000; }
-          const double CN_MULT = 1.5;
-          vec<double> covs;
-          int count = 0;
-          for ( int i = 0; i < dlines.isize( ); i++ )
-          {    if ( llens[i] < MIN_REP || llens[i] >= MAX_REP ) continue;
-               if ( COV[i] > BASE_CN * CN_MULT ) continue;
-               if ( COV[i] < BASE_CN / CN_MULT ) continue;
-               count++;
-               covs.push_back( COV[i] / BASE_CN );    }
-          if ( covs.nonempty( ) )
-          {    double dev = StdDev( covs, 1.0 );
-               cout << Date( ) << ": copy number dev for lines ";
-               if ( pass == 1 ) cout << "20-50 kb";
-               if ( pass == 2 ) cout << "50-100 kb";
-               if ( pass == 3 ) cout << "100+ kb";
-               cout << " = " << PERCENT_RATIO( 3, dev*1000, 1000 )
-                    << " [count=" << count << "]" << endl;    }    }    }
+     if (verbose)
+     {    for ( int pass = 1; pass <= 3; pass++ )
+          {    int MIN_REP, MAX_REP;
+               if ( pass == 1 ) { MIN_REP = 20000, MAX_REP = 50000; }
+               if ( pass == 2 ) { MIN_REP = 50000, MAX_REP = 100000; }
+               if ( pass == 3 ) { MIN_REP = 100000, MAX_REP = 1000000000; }
+               const double CN_MULT = 1.5;
+               vec<double> covs;
+               int count = 0;
+               for ( int i = 0; i < dlines.isize( ); i++ )
+               {    if ( llens[i] < MIN_REP || llens[i] >= MAX_REP ) continue;
+                    if ( COV[i] > BASE_CN * CN_MULT ) continue;
+                    if ( COV[i] < BASE_CN / CN_MULT ) continue;
+                    count++;
+                    covs.push_back( COV[i] / BASE_CN );    }
+               if ( covs.nonempty( ) )
+               {    double dev = StdDev( covs, 1.0 );
+                    cout << Date( ) << ": copy number dev for lines ";
+                    if ( pass == 1 ) cout << "20-50 kb";
+                    if ( pass == 2 ) cout << "50-100 kb";
+                    if ( pass == 3 ) cout << "100+ kb";
+                    cout << " = " << PERCENT_RATIO( 3, dev*1000, 1000 )
+                         << " [count=" << count << "]" << endl;    }    }    }    }
 
 
 void FixMisassemblies( const HyperBasevectorX& hb, const vec<Bool>& dup,
@@ -1031,7 +1035,8 @@ void FindCompoundHangs( const digraphE<vec<int>>& D, const vec<int>& dinv,
                               dels.push_back( es[i], dinv[ es[i] ] );    }
                                    }    }    }    }
 
-void CleanupCore( digraphE<vec<int>>& D, vec<int>& dinv )
+template <class DGE>
+void CleanupCore( DGE & D, vec<int>& dinv )
 {    if ( D.E( ) != dinv.isize( ) )
      {    cout << "\nInternal error, involution size not equal to number of edges.\n"
                << endl;
@@ -1072,7 +1077,89 @@ void CleanupCore( digraphE<vec<int>>& D, vec<int>& dinv )
      D.RemoveDeadEdgeObjects( );
      D.RemoveEdgelessVertices( );    }
 
-void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv )
+template void CleanupCore( digraphE<vec<int>>& D, vec<int>& dinv);
+template void CleanupCore( digraphE<vec<unsigned char>>& D, vec<int>& dinv);
+template void CleanupCore( digraphE<basevector>& D, vec<int>& dinv);
+template void CleanupCore( HyperBasevector& D, vec<int>& dinv);
+
+template <class DGE, class EL>
+void CleanupCore( DGE & D, vec<int>& dinv, vec<vec<quad<int,EL,int,EL>>>& supp )
+{    if ( D.E( ) != dinv.isize( ) )
+     {    cout << "\nInternal error, involution size not equal to number of edges.\n"
+               << endl;
+          PRINT2( D.E( ), dinv.size( ) );
+          TracebackThisProcess( );
+          Scram(1);    }
+     vec<Bool> used;
+     D.Used(used);
+     for ( int d = 0; d < D.E( ); d++ )
+     {    if ( dinv[d] < 0 || dinv[d] >= D.E( ) )
+          {    cout << "\nInternal error, involution value doesn't make sense.\n"
+                    << endl;
+               PRINT2( d, dinv[d ]);
+               TracebackThisProcess( );
+               Scram(1);    }
+          if ( dinv[dinv[d]] != d )
+          {    cout << "\nInternal error, involution is not an involution.\n"
+                    << endl;
+               PRINT3( d, dinv[d], dinv[dinv[d]] );
+               TracebackThisProcess( );
+               Scram(1);    }
+          if ( used[d] != used[ dinv[d] ] )
+          {    cout << "\nInternal error, involution maps used edge to unused "
+                    << "edge.\n" << endl;
+               PRINT(d);
+               TracebackThisProcess( );
+               Scram(1);    }    }
+     vec<int> to_new_id( used.size( ), -1 );
+     {    int count = 0;
+          for ( int i = 0; i < used.isize( ); i++ )
+               if ( used[i] ) to_new_id[i] = count++;    }
+     vec<int> dinv2;
+     for ( int i = 0; i < D.EdgeObjectCount( ); i++ )
+     {    if ( !used[i] ) continue;
+          if ( dinv[i] < 0 ) dinv2.push_back(-1); // SHOULD NOT HAPPEN!
+          else dinv2.push_back( to_new_id[ dinv[i] ] );    }
+     dinv = dinv2;
+     D.RemoveDeadEdgeObjects( );
+     D.RemoveEdgelessVertices( );    
+     vec<Bool> not_used;
+     for(auto a : used)
+         not_used.push_back(!a);
+     EraseEdges(supp,not_used);
+}
+
+template void CleanupCore( digraphE<vec<int>>& D, vec<int>& dinv,
+        vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+template void CleanupCore( digraphE<vec<unsigned char>>& D, vec<int>& dinv,
+        vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+template void CleanupCore( digraphE<basevector>& D, vec<int>& dinv,
+        vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+template void CleanupCore( HyperBasevector& D, vec<int>& dinv,
+        vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+
+
+// helper tags to template RemoveUnneededVertices
+struct signed_tag{};
+struct unsigned_tag{};
+
+template < typename T > struct DGE_tag;
+template < > struct DGE_tag<vec<int>> { typedef signed_tag type; };
+template < > struct DGE_tag<vec<unsigned char>> { typedef unsigned_tag type; };
+template < > struct DGE_tag<basevector> { typedef unsigned_tag type; };
+
+template <class T>
+bool DoCheck( digraphE<T> &D,int v, signed_tag){
+    return ( D.O( D.IFrom( v, 0 ) )[0] >= 0
+                    && D.O( D.ITo( v, 0 ) )[0] >= 0 );
+}
+template <class T>
+bool DoCheck( digraphE<T> &D,int v, unsigned_tag){
+    return true;
+}
+
+template <class T>
+void RemoveUnneededVertices( digraphE<T> & D, vec<int>& dinv)
 {
     // new algorithm
     // 1. make a list of vertices to kill
@@ -1098,11 +1185,12 @@ void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv )
 
     for ( int v = 0; v < D.N(); ++v )
         if ( D.FromSize(v) == 1 && D.ToSize(v) == 1
-                && D.From(v)[0] != D.To(v)[0]
-                && D.O( D.IFrom( v, 0 ) )[0] >= 0
-                && D.O( D.ITo( v, 0 ) )[0] >= 0 ) {
-            vertex_kill[v] = true;
-            vertex_queue.push_back(v);
+                && D.From(v)[0] != D.To(v)[0] ){
+            typedef typename DGE_tag<T>::type tag;
+            if(DoCheck<T>(D,v,tag())){
+                vertex_kill[v] = true;
+                vertex_queue.push_back(v);
+            }
         }
 
     // step 2
@@ -1155,7 +1243,7 @@ void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv )
         auto bounds = bound.back();
         bound.pop_back();
         int new_edge_no = D.EdgeObjectCount();
-        vec<int> new_edge( D.EdgeObject( bounds.first ) );
+        T new_edge( D.EdgeObject( bounds.first ) );
         edge_renumber0[ bounds.first ] = new_edge_no;
         to_delete.push_back( bounds.first );
 
@@ -1163,7 +1251,7 @@ void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv )
             // for each edge...
             int edge = D.EdgeObjectIndexByIndexFrom(v,0);
             to_delete.push_back(edge);
-            new_edge.SetCat( new_edge, D.EdgeObject(edge) );
+            new_edge.append( D.EdgeObject(edge) );
             edge_renumber0[edge] = new_edge_no;
         }
         D.AddEdge(to_left[bounds.first], to_right[bounds.second], new_edge);
@@ -1180,6 +1268,136 @@ void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv )
          dinv[itr[1]] = itr[0];
     }    }
 
+template void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv);
+template void RemoveUnneededVertices( digraphE<vec<unsigned char>>& D, vec<int>& dinv);
+template void RemoveUnneededVertices( digraphE<basevector>& D, vec<int>& dinv);
+
+template <class T, class EL>
+void RemoveUnneededVertices( digraphE<T> & D, vec<int>& dinv, 
+        vec<vec<quad<int,EL,int,EL>>>& supp )
+{
+    ForceAssertEq(supp.size(),D.E());
+    // new algorithm
+    // 1. make a list of vertices to kill
+    // 2. find the "boundary" edges at the front and tail of the run to remove
+    // 3. walk edges between/including boundary edges, building up new edge object,
+    //    and recording edge mappings.
+    // 4. add new edge object between boundary vertices;
+    // 5. delete all edges marked for deletion
+    //
+    // this all assumes that the involution can't share edges in any
+    // string of edges that we're interested in.  The only way I can see
+    // this happening is a single, palindromic edge, but that would not
+    // qualify for
+
+    vec<bool> vertex_kill( D.N(), false );
+    vec<int> vertex_queue, to_left, to_right;
+    D.ToLeft(to_left);
+    D.ToRight(to_right);
+
+    // step 1: make a list of vertices to kill
+    // o----o----o----o
+    // v0   v1   v2   v3
+
+    for ( int v = 0; v < D.N(); ++v )
+        if ( D.FromSize(v) == 1 && D.ToSize(v) == 1
+                && D.From(v)[0] != D.To(v)[0] ){
+            typedef typename DGE_tag<T>::type tag;
+            if(DoCheck<T>(D,v,tag())){
+                vertex_kill[v] = true;
+                vertex_queue.push_back(v);
+            }
+        }
+
+    // step 2
+
+    vec<pair<int,int>> bound;
+    while ( vertex_queue.size() ) {
+        int v = vertex_queue.back();
+        vertex_queue.pop_back();
+        if ( !vertex_kill[v] ) continue;     // already done it
+        int eleft;
+        int vleft = v;
+        size_t runsize = 0;
+        do {
+            runsize++;
+            vertex_kill[vleft] = false;
+            eleft = D.EdgeObjectIndexByIndexTo(vleft,0);
+            vleft = D.To(vleft)[0];
+        } while ( vertex_kill[vleft] );
+        int eright;
+        int vright = v;
+        do {
+            runsize++;
+            vertex_kill[vright] = false;
+            eright = D.EdgeObjectIndexByIndexFrom(vright,0);
+            vright = D.From(vright)[0];
+        } while ( vertex_kill[vright] );
+        runsize--;      // 'v' gets counted twice
+
+        // We rely on the fact that the involution is not
+        // tied up with the path here.  We decide to push on the involution
+        // here, too, so that we *know* what the inv[] of the new edge is.  However,
+        // this requires that we canonicalize, so we don't do this twice.  This
+        // canonicalization looks odd, but is correct (I think).
+
+        if ( eleft < dinv[eright] ) {
+            // WARNING: code below relies on the fact that we're pushing on a
+            // run and its involution adjacent in this list.
+            bound.push(eleft,eright);
+            bound.push(dinv[eright], dinv[eleft]);
+
+        }
+    }
+
+    // steps 3 and 4
+
+    vec<int> edge_renumber0( D.EdgeObjectCount(), vec<int>::IDENTITY );
+    vec<int> new_edge_numbers;
+    vec<int> to_delete;
+    while ( bound.size() ) {
+        auto bounds = bound.back();
+        bound.pop_back();
+        int new_edge_no = D.EdgeObjectCount();
+        vec<int> merge_list;
+        merge_list.push_back(bounds.first);
+        T new_edge( D.EdgeObject( bounds.first ) );
+        edge_renumber0[ bounds.first ] = new_edge_no;
+        to_delete.push_back( bounds.first );
+
+        for ( int v = to_right[bounds.first]; v != to_right[bounds.second]; v = D.From(v)[0] ) {
+            // for each edge...
+            int edge = D.EdgeObjectIndexByIndexFrom(v,0);
+            to_delete.push_back(edge);
+            merge_list.push_back(edge);
+            new_edge.append( D.EdgeObject(edge) );
+            edge_renumber0[edge] = new_edge_no;
+        }
+        supp.push_back(vec<quad<int,EL,int,EL>>());
+        MergeSupport(supp,merge_list,supp.back());
+        D.AddEdge(to_left[bounds.first], to_right[bounds.second], new_edge);
+        new_edge_numbers.push_back(new_edge_no);
+    }
+    D.DeleteEdges(to_delete);
+    DeleteEdges(supp,to_delete);
+
+    // for each pair of newly created edges, update mInv
+
+    dinv.resize( D.E( ) );
+    for (auto itr = new_edge_numbers.begin();
+            itr != new_edge_numbers.end(); advance(itr,2)) {
+         dinv[itr[0]] = itr[1];
+         dinv[itr[1]] = itr[0];
+    }    }
+
+template void RemoveUnneededVertices( digraphE<vec<int>>& D, vec<int>& dinv, 
+        vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+template void RemoveUnneededVertices( digraphE<vec<unsigned char>>& D, 
+        vec<int>& dinv, vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+template void RemoveUnneededVertices( digraphE<basevector>& D, vec<int>& dinv, 
+        vec<vec<quad<int,uint16_t,int,uint16_t>>>& supp);
+
+
 // Kill components having low unique content.
 
 void KillLowUnique( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
@@ -1193,7 +1411,7 @@ void KillLowUnique( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
      D.ComponentsEFast(comp);
      if (verbose) cout << Date( ) << ": finding unique content" << endl;
      for ( int i = 0; i < comp.isize( ); i++ )
-     {    int uc = 0;
+     {    int64_t uc = 0;
           for ( int j = 0; j < comp[i].isize( ); j++ )
           {    int d = comp[i][j];
                if ( D.O(d)[0] < 0 ) continue;
@@ -1228,6 +1446,103 @@ void KillLowUniqueFrac( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
                #pragma omp critical
                {    dels.append( comp[i] );    }    }    }    }
 
+// Kill components whose edges all have zero read support and whose base edge
+// content is a subset of a component with non-zero read support
+
+void KillZeroWeightComponents( const HyperBasevectorX & hb, digraphE<vec<int>> & D, 
+     vec<int> & dinv, const VecULongVec & dpaths_index, const Bool verbose )
+{
+     const double MIN_COV = 1.0;
+     const double MIN_SHARE = 0.95;
+
+     const Bool debug = False;
+     
+     if ( verbose ) cout << Date( ) << ": finding zero weight components" << endl;
+     vec<vec<int>> comps;
+     D.ComponentsEFast( comps );
+     
+     vec<int> zwcomps;
+     vec<Bool> zweight( comps.size(), True );
+     #pragma omp parallel for
+     for ( int i = 0; i < comps.isize(); i++ ) {
+          double size = 0;
+          vec<int64_t> ids;
+          for ( auto & d : comps[i] ) {
+               if ( D.O(d)[0] < 0 ) continue;
+               for ( auto & id : dpaths_index[d] )
+                    ids.push_back( id );
+               for ( auto & id : dpaths_index[dinv[d]] )
+                    ids.push_back( id );
+               for ( auto & e : D.O(d) )
+                    size += hb.Kmers(e);
+          }
+          UniqueSort( ids );
+          double cov = 140.0*ids.size()/size;
+          if ( cov > MIN_COV ) zweight[i] = False;
+     }
+     for ( int i = 0; i != comps.isize( ); i++ )
+          if ( zweight[i] ) zwcomps.push_back( i );
+     
+     if ( zwcomps.empty( ) ) {
+          if ( verbose ) cout << Date( ) << ": no zero weight components" << endl;
+          return;
+     }
+     if ( verbose ) cout << Date( ) << ": building index" << endl;
+     
+     vec<vec<int>> count( comps.size(), vec<int>( comps.size(), 0 ) );
+     vec<vec<int>> zwci( hb.E( ) );
+     vec<vec<int>> nzwci( hb.E( ) );
+     for ( int i = 0; i < comps.isize( ); i++ ) {
+          vec<vec<int>> & ci = (zweight[i] ? zwci : nzwci );
+          for ( auto & d : comps[i] ) {
+               if ( D.O(d)[0] < 0 ) continue;
+               for ( auto & e : D.O(d) )
+                    ci[e].push_back( i );
+          }
+     }
+     if ( verbose ) cout << Date( ) << ": finding shared edges" << endl;
+     for ( int e = 0; e < hb.E( ); e++ ) {
+          if ( nzwci[e].empty( ) || zwci[e].empty( ) ) continue;
+          UniqueSort(nzwci[e]);
+          UniqueSort(zwci[e]);
+          for ( auto & zc : zwci[e] ) {
+               for ( auto & nzc : nzwci[e] ) {
+                    count[zc][nzc]++;
+               }
+          }
+     }
+
+     if ( verbose ) cout << Date( ) << ": marking edges for deletion" << endl;
+
+     vec<int> dels;
+     for ( auto & zc : zwcomps ) {
+          vec<int> edges;
+          for ( auto & d : comps[zc] ) {
+               if ( D.O(d)[0] < 0 ) continue;
+               for ( auto & e : D.O(d) )
+                    edges.push_back(e);
+          }
+          UniqueSort(edges);
+          int tot_edges = edges.size();
+          int shared = Max( count[zc] );
+          if ( debug ) {
+               cout << "Zero weight component (d=" << comps[zc][0] << ")" << endl;
+               cout << "Shares " << shared << " of " << tot_edges 
+                    << " base edges" << endl;
+          }
+          double share_frac = double(shared)/double(tot_edges);
+          if ( share_frac > MIN_SHARE )
+               dels.append( comps[zc] );
+     }
+     if ( verbose ) cout << Date( ) << ": deleted " << ToStringAddCommas( dels.size() )
+                         << " edges" << endl;
+     D.DeleteEdges( dels );
+     if ( verbose ) cout << Date( ) << ": clean up" << endl;
+
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );
+
+}
 // Tidy graph by removing duff at the end of longish lines.
 
 void RemoveDuff( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
@@ -1295,12 +1610,83 @@ void RemoveDuff( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
                     #pragma omp critical
                     {    dels.push_back( g, dinv[g] );    }    }    }    }    }
 
+void RemoveDuffx( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
+     vec<int>& dinv, const int MAX_KILL,
+     const double MIN_RATIO, const Bool verbose )
+{
+     // Heuristics.
+
+     const int MIN_PRE_END = 500;
+
+     // Do it.
+
+     vec<int> lens( D.E( ), 0 );
+     #pragma omp parallel for
+     for ( int d = 0; d < D.E( ); d++ )
+     {    if ( IsCell( D.O(d) ) )
+          {    cell x;
+               x.CellDecode( D.O(d) );
+               const digraphE<vec<int>>& C = x.G( );
+               for ( int c = 0; c < C.E( ); c++ )
+               {    if ( C.O(c)[0] < 0 ) continue;
+                    for ( auto e : C.O(c) ) lens[d] += hb.Kmers(e);    }    }
+          else if ( D.O(d)[0] < 0 ) continue;
+          else for ( auto e : D.O(d) ) lens[d] += hb.Kmers(e);    }
+     vec<int> dfw;
+     DistancesToEndArr( D, lens, MAX_KILL * MIN_RATIO, True, dfw );
+     if (verbose) cout << Date( ) << ": finding lines" << endl;
+     vec<vec<vec<vec<int>>>> dlines;
+     FindLines( D, dinv, dlines, MAX_CELL_PATHS, MAX_CELL_DEPTH );
+
+     // Get line lengths.
+
+     if (verbose) cout << Date( ) << ": getting line lengths" << endl;
+     vec<int> llens;
+     GetLineLengths( hb, D, dlines, llens );
+
+     // Remove duff.
+
+     if (verbose) cout << Date( ) << ": removing duff" << endl;
+     vec<int> to_left, to_right;
+     D.ToLeft(to_left), D.ToRight(to_right);
+     vec<int> dels;
+     #pragma omp parallel for schedule( dynamic, 1000 )
+     for ( int li = 0; li < dlines.isize( ); li++ )
+     {    if ( llens[li] < MIN_PRE_END ) continue;
+          int e = dlines[li].front( )[0][0];
+          int f = dlines[li].back( )[0][0];
+
+          // Now we've identified a line that goes from e to f.  Trim duff on the
+          // right, if there's not too much.
+
+          if ( dfw[to_right[f]] > MAX_KILL  ) continue;
+          vec<int> vs, ds;
+          vs.push_back( to_right[f] );
+          for ( int i = 0; i < vs.isize( ); i++ )
+          {    int v = vs[i];
+               for ( int j = 0; j < D.From(v).isize( ); j++ )
+               {    int w = D.From(v)[j];
+                    if ( !Member( vs, w ) ) vs.push_back(w);
+                    int g = D.IFrom(v,j);
+                    #pragma omp critical
+                    {    dels.push_back( g, dinv[g] );    }    
+                    if (verbose) ds.push_back(g);    }    }    
+          if ( verbose && ds.nonempty( ) )
+          {    vec<int> rds(ds);
+               for ( auto& d : ds ) d = dinv[d];
+               cout << "deleting " << printSeq(ds) << " and "
+                    << printSeq(rds) << endl;    }    }
+     D.DeleteEdges(dels);
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );    }
+
 // Remove duff.  Suppose that at the end of the line is a collection of edges 
 // containing in total a "small" number of kmers.  Then delete these edges.  A bit 
 // dangerous in how cells (gap edge type) are handled.  Also we could just liberate 
 // the duff rather than delete it.
 
-void RemoveDuff2( const HyperBasevectorX& hb, digraphE<vec<int>>& D, vec<int>& dinv )
+void RemoveDuff2( const HyperBasevectorX& hb, digraphE<vec<int>>& D, vec<int>& dinv,
+     const int MAX_DEL, const int MIN_RATIO, const Bool verbose )
 {
      cout << Date( ) << ": removing duff 2" << endl;
      vec<vec<vec<vec<int>>>> dlines;
@@ -1316,8 +1702,6 @@ void RemoveDuff2( const HyperBasevectorX& hb, digraphE<vec<int>>& D, vec<int>& d
      vec<int> llens;
      GetLineLengths( hb, D, dlines, llens );
      const int MIN_LEN = 1000;
-     const int MAX_DEL = 1000;
-     const int MIN_RATIO = 10;
      vec<int> dels;
      for ( int l = 0; l < dlines.isize( ); l++ )
      {    if ( llens[l] < MIN_LEN ) continue;
@@ -1363,6 +1747,11 @@ void RemoveDuff2( const HyperBasevectorX& hb, digraphE<vec<int>>& D, vec<int>& d
                                    goto next;    }    }    }    }    }
           for ( int i = 0; i < ds.isize( ); i++ )
                dels.push_back( ds[i], dinv[ ds[i] ] );
+          if ( verbose && ds.nonempty( ) )
+          {    vec<int> rds(ds);
+               for ( auto& d : rds ) d = dinv[d];
+               cout << "deleting " << printSeq(ds) << " and "
+                    << printSeq(rds) << endl;    }
           next: continue;    }
      D.DeleteEdges(dels);
      RemoveUnneededVertices( D, dinv );
@@ -1767,9 +2156,149 @@ void Cleaner( const HyperBasevectorX& hb, const vec<int>& inv,
      if (verbose)
           cout << Date( ) << ": final graph has " << D.E( ) << " edges" << endl;    }
 
-void Zipper( digraphE<vec<int>>& D, vec<int>& dinv )
+
+template <class F>
+void CollapseToQuotientGraph(digraphE<F>& D,vec<int>& dinv, const equiv_rel & ee,
+        const Bool verbose)
 {
-    cout << Date( ) << ": zippering" << endl;
+    if (verbose) cout << Date( ) << ": setting up data structures" << endl;
+    ForceAssertEq( ee.Size( ), D.E( ) );
+    vec<int> to_left, to_right, ereps, vreps;
+    // induced equivalence relation on vertices
+    equiv_rel ev( D.N( ) );
+    int N = -1;
+    // quotient graph data structures
+    digraphE<F> D_new;
+    vec<F> & edges = D_new.EdgesMutable();
+    vec<vec<int>> & from = D_new.FromMutable(), & to = D_new.ToMutable(), 
+        & from_edge_obj = D_new.FromEdgeObjMutable(),
+        & to_edge_obj = D_new.ToEdgeObjMutable();
+
+    D.ToLeft(to_left), D.ToRight(to_right);
+    ee.OrbitRepsAlt(ereps);
+    edges.resize( ereps.size( ) );
+
+    if (verbose) cout << Date( ) << ": define vertex relation" << endl;
+    
+    // this is single threaded to avoid non-determinism
+    for ( int r = 0; r < ereps.isize( ); r++ )
+    {    vec<int> o;
+         ee.Orbit( ereps[r], o );
+         for ( int j1 = 0; j1 < o.isize( ) - 1; j1++ )
+         {    int j2 = j1 + 1;
+              ev.Join( to_left[ o[j1] ], to_left[ o[j2] ] );
+              ev.Join( to_right[ o[j1] ], to_right[ o[j2] ] );    }
+         edges[r] = D.O( o[0] );    }
+    ev.OrbitRepsAlt(vreps);
+    
+    if (verbose) cout << Date() << ": constructing from" << endl;
+    N = vreps.size( );
+    from.resize(N), to.resize(N), from_edge_obj.resize(N), to_edge_obj.resize(N);
+    // get the froms
+    #pragma omp parallel for schedule (dynamic,1000)
+    for ( int v = 0; v < N; v++ )
+    {    vec<int> o;
+         ev.Orbit( vreps[v], o );
+         vec< pair<int,int> > we;
+         for ( int j = 0; j < o.isize( ); j++ )
+         {    int vp = o[j];
+              for ( int k = 0; k < D.From(vp).isize( ); k++ )
+              {    int wp = D.From(vp)[k], ep = D.IFrom( vp, k );
+                   int w = BinPosition( vreps, ev.ClassId(wp) );
+                   int e = BinPosition( ereps, ee.ClassId(ep) );
+                   we.push( w, e );    }    }    
+         UniqueSort(we);
+         for ( int j = 0; j < we.isize( ); j++ )
+         {    int w = we[j].first, e = we[j].second;
+              from[v].push_back(w); 
+              from_edge_obj[v].push_back(e);    }     }
+
+    if (verbose) cout << Date() << ": constructing to" << endl;
+    // get the tos
+    #pragma omp parallel for schedule (dynamic,1000)
+    for ( int v = 0; v < N; v++ )
+    {    vec<int> o;
+         ev.Orbit( vreps[v], o );
+         vec< pair<int,int> > we;
+         for ( int j = 0; j < o.isize( ); j++ )
+         {    int vp = o[j];
+              for ( int k = 0; k < D.To(vp).isize( ); k++ )
+              {    int wp = D.To(vp)[k], ep = D.ITo( vp, k );
+                   int w = BinPosition( vreps, ev.ClassId(wp) );
+                   int e = BinPosition( ereps, ee.ClassId(ep) );
+                   we.push( w, e );    }    }    
+         UniqueSort(we);
+         for ( int j = 0; j < we.isize( ); j++ )
+         {    int w = we[j].first, e = we[j].second;
+              to[v].push_back(w); 
+              to_edge_obj[v].push_back(e);    }     }
+
+    if (verbose) cout << Date( ) << ": sort syncing" << endl;
+    
+    // sort sync
+    #pragma omp parallel for schedule(dynamic,1)
+    for ( int v = 0; v < N; v++ )
+    {    SortSync( from[v], from_edge_obj[v] );
+         SortSync( to[v], to_edge_obj[v] );    }
+
+    vec<F> & edges2 = D.EdgesMutable();
+    vec<vec<int>> & from2 = D.FromMutable(), & to2 = D.ToMutable(), 
+        & from_edge_obj2 = D.FromEdgeObjMutable(),
+        & to_edge_obj2 = D.ToEdgeObjMutable();
+
+    #pragma omp parallel sections
+    {
+         #pragma omp section
+         {     from2 = from;     }
+         #pragma omp section
+         {     to2 = to;     }
+         #pragma omp section
+         {     from_edge_obj2 = from_edge_obj;     }
+         #pragma omp section
+         {     to_edge_obj2 = to_edge_obj;     }
+         #pragma omp section
+         {     edges2 = edges;     }
+         #pragma omp section
+         {
+              // translate old dinv to new dinv using reps
+              vec<int> dinv_new(D_new.E( ),-1);
+              for(int i = 0; i < D_new.E( ); i++)
+                  dinv_new[i] = BinPosition(ereps,ee.ClassId(dinv[ereps[i]]));
+              dinv = dinv_new;
+          }
+     }
+}
+
+template <class F>
+void CollapseToQuotientGraph(digraphE<F>& D,vec<int>& dinv,const vec<vec<int>>& orbits,
+        const Bool verbose)
+{
+    if (verbose)
+        cout << Date( ) << ": constructing the quotient graph" << endl;
+ 
+    // !!!! make sure orbits are closed under involution and mutually exclusive
+    // REPLACE THIS with snippet, & uncomment parallel directive few lines below
+    auto new_orbits = orbits;
+
+    equiv_rel ee;
+    ee.Initialize(D.E( ));
+    /* #pragma omp parallel for */
+    for(int k = 0; k < new_orbits.isize( ); k++)
+        for(auto o: new_orbits[k])
+           ee.Join(new_orbits[k].back(),o);
+    
+    CollapseToQuotientGraph<F>( D, dinv, ee, verbose );
+}
+
+
+
+template void CollapseToQuotientGraph(digraphE<vec<int>>& D,vec<int>& dinv,const vec<vec<int>>& orbits, const Bool verbose);
+
+void Zipper( digraphE<vec<int>>& D, vec<int>& dinv, const Bool SINGLE, 
+     const Bool verbose )
+{
+    if ( verbose )
+        cout << Date( ) << ": start making passes to zipper" << endl;
     // for each super-edge, the vertices to the left and to the right
     vec<int> to_left, to_right;
     D.ToLeft(to_left), D.ToRight(to_right);
@@ -1779,11 +2308,12 @@ void Zipper( digraphE<vec<int>>& D, vec<int>& dinv )
     int loop_count=0;
     // list of vertices to delete after each zippering loop
     vec<int> dels;
+    const int nthreads = (SINGLE ? 1 : omp_get_max_threads( ));
     while(1) { //we are going to iteratively zipper
         int zips = 0;
         // list of candidate vertices for zippering.
         vec<int> can;
-        #pragma omp parallel for
+        #pragma omp parallel for num_threads(nthreads) schedule (dynamic, 1000)
         for ( int v = 0; v < D.N( ); v++ )  {
         // there must be two outgoing edges at least.
         if ( D.From(v).size( ) >= 2 )   {
@@ -1921,8 +2451,9 @@ void Zipper( digraphE<vec<int>>& D, vec<int>& dinv )
     dels.clear( );
     loop_count++;
     } // close of while (1)
-    cout << Date( ) << ": made " << allzips << " zips. ";
-    cout << loop_count << " loops." << endl;
+    if ( verbose )
+        cout << Date( ) << ": made " << ToStringAddCommas(allzips) << " zips in "
+             << loop_count << " passes." << endl;
     RemoveUnneededVertices( D, dinv );
     CleanupCore( D, dinv );
 }
@@ -1963,7 +2494,7 @@ void Validate( const HyperBasevectorX& hb, const vec<int>& inv,
      for ( int bi = 0; bi < bads.isize( ); bi++ )
      {    int e = bads[bi];
           const vec<int>& x = D.O(e);
-          cout << "\nIllegal empty edge." << endl;
+          cout << "\nIllegal empty edge " << e << endl;
           TracebackThisProcess( );
           Scram(1);    }
 
@@ -2165,7 +2696,32 @@ void Validate( const HyperBasevectorX& hb, const vec<int>& inv,
                     i = j - 1;    }    }    }
      */
 
-          }
+     // Check for unused edges.
+
+     vec<Bool> used;
+     D.Used(used);
+     if ( Sum(used) < D.E( ) )
+     {    cout << "\nThere are " << D.E( ) - Sum(used) << " unused edges." << endl;
+          TracebackThisProcess( );
+          Scram(1);    }
+
+     if ( !STRONG_VALIDATE ) return;
+
+     // Check for certain unneeded vertices.
+
+     vec<int> ds;
+     for ( int v = 0; v < D.N( ); v++ )
+     {    if ( D.To(v).solo( ) && D.From(v).solo( ) )
+          {    int x = D.To(v)[0], y = D.From(v)[0];
+               if ( !IsUnique( vec<int>{ x, v, y } ) ) continue;
+               int d1 = D.ITo(v,0), d2 = D.IFrom(v,0);
+               if ( !IsCell( D.O(d1) ) || !IsCell( D.O(d2) ) ) continue;
+               ds.push_back( D.IFrom(v,0) );    }    }
+     if ( ds.nonempty( ) )
+     {    cout << "\nThere are " << ds.size( ) << " unneeded vertices, including "
+               << "one at edge " << ds[0] << "." << endl;
+          TracebackThisProcess( );
+          Scram(1);    }    }
 
 void Emanate( digraphE<vec<int>>& D, vec<int>& dinv, const Bool verbose )
 {    if (verbose) cout << Date( ) << ": start emanate" << endl;
@@ -2297,8 +2853,17 @@ void Emanate2( const vec<int>& inv, digraphE<vec<int>>& D, vec<int>& dinv,
 void LineProx( const HyperBasevectorX& hb, const vec<int>& inv,
      const VecIntVec& ebcx, const digraphE<vec<int>>& D, const vec<int>& dinv,
      const vec<vec<vec<vec<int>>>>& dlines,
-     const vec< triple<int,int,int> >& qept, vec< vec< pair<int,int> > >& lhood )
+     const vec< triple<int,int,int> >& qept, vec< vec< pair<int,int> > >& lhood,
+     const Bool verbose )
 {
+     // Sanity check.
+
+     if ( (int) ebcx.size( ) != hb.E( ) )
+     {    cout << "\n" << Date( ) << ": bad data passed to LineProx" << endl;
+          PRINT2( ebcx.size( ), hb.E( ) )
+          cout << endl;
+          Scram(1);    }
+
      // Heuristics.
 
      const int LOOK_IN = 10000;
@@ -2334,14 +2899,15 @@ void LineProx( const HyperBasevectorX& hb, const vec<int>& inv,
 
      // Compute barcode sets for each line, looking only at the ends.
 
-     cout << Date( ) << ": compute barcode sets for lines" << endl;
+     if (verbose) cout << Date( ) << ": compute barcode sets for lines" << endl;
      vec<vec<int>> lbc( dlines.size( ) );
-     #pragma omp parallel for
+     #pragma omp parallel for schedule(dynamic, 1000)
      for ( int i = 0; i < dlines.isize( ); i++ )
      {    const vec<vec<vec<int>>>& L = dlines[i];
           int pos = 0;
           for ( int j = 0; j < L.isize( ); j++ )
           {    vec<int> lensj;
+               vec<int> es;
                for ( int k = 0; k < L[j].isize( ); k++ )
                {    int len = 0;
                     for ( int l = 0; l < L[j][k].isize( ); l++ )
@@ -2350,14 +2916,17 @@ void LineProx( const HyperBasevectorX& hb, const vec<int>& inv,
                          for ( int m = 0; m < D.O(d).isize( ); m++ )
                          {    int e = D.O(d)[m];
                               if ( pos + len <= LOOK_IN && mult[e] == 1 )
-                              {    for ( auto b : ebcx[e] ) lbc[i].push_back(b);    }
+                                   es.push_back(e);
                               len += hb.Kmers(e);    }    }
                     lensj.push_back(len);    }
+               UniqueSort(es);
+               for ( auto e : es ) for ( auto b : ebcx[e] ) lbc[i].push_back(b);
                Sort(lensj);
                if ( lensj.nonempty( ) ) pos += Median(lensj);    }
           pos = 0;
           for ( int j = L.isize( ) - 1; j >= 0; j-- )
           {    vec<int> lensj;
+               vec<int> es;
                for ( int k = 0; k < L[j].isize( ); k++ )
                {    int len = 0;
                     for ( int l = L[j][k].isize( ) - 1; l >= 0; l-- )
@@ -2366,16 +2935,18 @@ void LineProx( const HyperBasevectorX& hb, const vec<int>& inv,
                          for ( int m = D.O(d).isize( ) - 1; m >= 0; m-- )
                          {    int e = D.O(d)[m];
                               if ( pos + len <= LOOK_IN && mult[e] == 1 )
-                              {    for ( auto b : ebcx[e] ) lbc[i].push_back(b);    }
+                                   es.push_back(e);
                               len += hb.Kmers(e);    }    }
                     lensj.push_back(len);    }
+               UniqueSort(es);
+               for ( auto e : es ) for ( auto b : ebcx[e] ) lbc[i].push_back(b);
                Sort(lensj);
                if ( lensj.nonempty( ) ) pos += Median(lensj);    }
           UniqueSort( lbc[i] );    }
 
      // Index barcode links.
 
-     cout << Date( ) << ": indexing barcode links" << endl;
+     if (verbose) cout << Date( ) << ": indexing barcode links" << endl;
      vec<int> qep_index( hb.E( ) + 1, -1 );
      qep_index.back( ) = qept.size( );
      for ( int64_t i = qept.jsize( ) - 1; i >= 0; i-- )
@@ -2385,7 +2956,7 @@ void LineProx( const HyperBasevectorX& hb, const vec<int>& inv,
 
      // Find barcode neighbors.
 
-     cout << Date( ) << ": finding barcode neighbors" << endl;
+     if (verbose) cout << Date( ) << ": finding barcode neighbors" << endl;
      lhood.clear_and_resize( dlines.size( ) );
      const int MIN_LEN = 100;
      const int MIN_LINKS = 6;
@@ -2429,16 +3000,17 @@ int LineN50( const HyperBasevectorX& hb, const digraphE<vec<int>>& D,
      GetLineLengths( hb, D, dlines, llens );
      return ( llens.size( ) > 0 ? N50(llens) : 0 );    }
 
-void KillInversionArtifacts( const digraphE<vec<int>>& D, const vec<int>& dinv,
+void KillInversionArtifacts( const HyperBasevectorX& hb,
+     const digraphE<vec<int>>& D, const vec<int>& dinv,
      const ReadPathVec& dpaths, const IntIndex& dpaths_index, 
-     const vec<int64_t>& bid, vec<int>& dels, const int MAX_CAN_INS_DEL )
+     const vec<int64_t>& bid, vec<int>& dels, const int MAX_CAN_INS_DEL,
+     const int MIN_CAN_INS_RATIO, const Bool advanced, const Bool verbose )
 {
      // Kill low depth canonical inversions.
 
-     cout << Date( ) << ": killing low depth canonical inversions" << endl;
-     const int MIN_CAN_INS_RATIO = 5;
+     if (verbose)
+          cout << Date( ) << ": killing low depth canonical inversions" << endl;
      int ndels = 0;
-     Bool verbose = False;
      #pragma omp parallel for
      for ( int v = 0; v < D.N( ); v++ )
      {    if ( !D.To(v).solo( ) || D.From(v).size( ) != 2 ) continue;
@@ -2448,10 +3020,11 @@ void KillInversionArtifacts( const digraphE<vec<int>>& D, const vec<int>& dinv,
                if ( !D.From(w).solo( ) ) continue;
                int e = D.IFrom(w,0), z = D.IFrom(v,j1), f = D.IFrom(v,j2);
                int h = D.ITo(v,0);
-               if (verbose)
+               if (verbose && D.O(z)[0] >= 0)
                {
                     #pragma omp critical
                     {    cout << "trying z = " << z << " = " << printSeq( D.O(z) ) 
+                              << ", seq = " << hb.Cat( D.O(z) ).ToString( )
                               << ", e = " << e << ", z = " << z
                               << ", f = " << f << ", h = " << h << endl;    }    }
 
@@ -2470,7 +3043,11 @@ void KillInversionArtifacts( const digraphE<vec<int>>& D, const vec<int>& dinv,
                                    if ( D.To(p).solo( ) )
                                    {    nhood[1].push_back( 
                                              D.ITo(p,0) );    }    }    }    }    }
-          
+
+               if (advanced)
+               {    int x = D.To(v)[0];
+                    nhood[0].append( D.ToEdgeObj(x) );    }
+    
                Bool looks_like = False;
                for ( auto x : nhood[0] )
                for ( auto y : nhood[1] )
@@ -2544,7 +3121,9 @@ void KillInversionArtifacts( const digraphE<vec<int>>& D, const vec<int>& dinv,
                {    dels.push_back( z, dinv[z] );
                     ndels += 2;    }
                break;    }    }
-     cout << Date( ) << ": identified " << ndels << " edges to delete" << endl;    }
+     if (verbose)
+     {    cout << Date( ) 
+               << ": identified " << ndels << " edges to delete" << endl;    }    }
 
 void SimpleHangs( const HyperBasevectorX& hb, digraphE<vec<int>>& D,
      const vec<int>& dinv, vec<int>& dels, const int MAX_KILL,
@@ -2625,7 +3204,7 @@ void ZapMegaInversionBubbles( digraphE<vec<int>>& D, const vec<int>& dinv )
           int v = to_left[ L.front( )[0][0] ], w = to_right[ L.back( )[0][0] ];
           if ( D.To(v).solo( ) && D.From(v).size( ) == 2 )
           {    int l1 = tol[ D.IFrom(v,0) ], l2 = tol[ D.IFrom(v,1) ];
-               if ( linv[l1] == l2 )
+               if ( l1 >= 0 && linv[l1] == l2 )
                {    
                     #pragma omp critical
                     {    splays.push_back( v, w );    }    }    }    }
@@ -2646,12 +3225,13 @@ int64_t CheckSum( const HyperBasevectorX& hb, const vec<int>& inv,
           C += (d+1) * (d+1) * (dinv[d] + 1);
      return C;    }
 
-// MakeMerges: M = { ( (d1,p1), (d2,p2), n ) } where 
+// MakeMergesOnly: M = { ( (d1,p1), (d2,p2), n ) } where 
 // interval [p1,p1+n) on superedge d1 matches interval [p2,p2+n) on superedge d2.
 // It looks like merge set should be symmetric with respect to the involution,
 // but not checked carefully.
 
-int MakeMerges( const vec< triple< pair<int,int>, pair<int,int>, int > >& M,
+template <class INT_TYPE>
+int MakeMergesOnly( const vec< triple< pair<int,int>, pair<int,int>, INT_TYPE > >& M,
      digraphE<vec<int>>& D, vec<int>& dinv, const Bool verbose )
 {
      // Segment edges.
@@ -2661,6 +3241,7 @@ int MakeMerges( const vec< triple< pair<int,int>, pair<int,int>, int > >& M,
                << ToStringAddCommas( M.size( ) ) << " matches" << endl;    }
      vec<Bool> touched( D.E( ), False ), to_use( M.size( ), False );
      vec<vec<int>> segs( D.E( ) );
+     // tag match intervals
      for ( int i = 0; i < M.isize( ); i++ )
      {    int d1 = M[i].first.first, j1 = M[i].first.second;
           int d2 = M[i].second.first, j2 = M[i].second.second;
@@ -2691,13 +3272,13 @@ int MakeMerges( const vec< triple< pair<int,int>, pair<int,int>, int > >& M,
           if ( dinv[d1] < d1 ) continue;
           int n = M[i].third;
           int rd1 = dinv[d1], rd2 = dinv[d2];
-          dels.push_back( d1, d2, rd1, rd2 );
           int v1 = to_left[d1], w1 = to_right[d1];
           int v2 = to_left[d2], w2 = to_right[d2];
           int rv1 = to_left[rd1], rw1 = to_right[rd1];
           int rv2 = to_left[rd2], rw2 = to_right[rd2];
           if ( !IsUnique( vec<int>{ v1, w1, v2, w2, rv1, rw1, rv2, rw2 } ) )
                continue;
+          dels.push_back( d1, d2, rd1, rd2 );
           int rj1 = D.O(d1).isize( ) - j1 - n, rj2 = D.O(d2).isize( ) - j2 - n;
           joins += 2;
           const vec<int> &segs1 = segs[d1], &segs2 = segs[d2];
@@ -2762,26 +3343,68 @@ int MakeMerges( const vec< triple< pair<int,int>, pair<int,int>, int > >& M,
      {    cout << Date( ) << ": found " << ToStringAddCommas(joins) 
                << " joins" << endl;    }
      D.DeleteEdges(dels);
+     return joins;
+}
+
+// MakeMerges: First make all the merges in the match list M using MakeMergesOnly
+//             and then call Zipper( ). This step can be SLOW if the graph is very
+//             "loose" and unzippered.
+
+int MakeMerges( const vec< triple< pair<int,int>, pair<int,int>, int > >& M,
+     digraphE<vec<int>>& D, vec<int>& dinv, const Bool verbose )
+{
+     int joins = MakeMergesOnly<int>( M, D, dinv, verbose );
+
+     if (verbose) cout << Date( ) << ": start zippering" << endl;
      Zipper( D, dinv );
+     if (verbose) cout << Date( ) << ": zippering complete" << endl;
      return joins;    }
 
+// Is there a seq gap edge neighboring d with a non-trivial trim?
+// True ==> yes there is
+
+Bool DetectSeqGapsWithTrim( const digraphE<vec<int>> & D,
+     const vec<int> & to_left, const vec<int> & to_right, const int & d )
+{
+     const int v = to_left[d], w = to_right[d];
+     basevector x;
+     int ltrim, rtrim;
+     for ( int i = 0; i != D.To(v).isize( ); i++ ) {
+          const int dp = D.ITo(v, i);
+          if ( IsSequence ( D.O(dp) ) ) {
+               x.clear( );
+               GapToSeq( D.O(dp), ltrim, rtrim, x );
+               if ( rtrim != 0 ) return True;
+          }
+     }
+     for ( int i = 0; i != D.From(w).isize( ); i++ ) {
+          const int dp = D.IFrom( w, i );
+          if ( IsSequence( D.O(dp) ) ) {
+               x.clear( );
+               GapToSeq( D.O(dp), ltrim, rtrim, x );
+               if ( ltrim != 0 ) return True;
+          }
+     }
+     return False;
+}
 // Try to merge along relatively short overlaps that are proximate in the graph.
 
-void MergeShortOverlaps( HyperBasevectorX& hb, vec<int>& inv, digraphE<vec<int>>& D,
-     vec<int>& dinv, const int LOOK_MERGE, const Bool allow_two )
+void MergeShortOverlaps( const HyperBasevectorX& hb, const vec<int>& inv, 
+     digraphE<vec<int>>& D, vec<int>& dinv, const int LOOK_MERGE, const int LOOK, 
+     const Bool allow_two, const Bool verbose, const Bool SINGLE )
 {
-     cout << Date( ) << ": start micromerger" << endl;
-     const int LOOK = 6;
+     if (verbose) cout << Date( ) << ": start micromerger" << endl;
      vec<int> to_left, to_right, lens( D.E( ), 0 );
      D.ToLeft(to_left), D.ToRight(to_right);
-     #pragma omp parallel for
+     const int nthreads = ( SINGLE ? 1 : omp_get_max_threads( ) );
+     #pragma omp parallel for num_threads( nthreads )
      for ( int e = 0; e < D.E( ); e++ )
      {    if ( D.O(e)[0] < 0 ) continue;
           for ( int j = 0; j < D.O(e).isize( ); j++ )
                lens[e] += hb.Kmers( D.O(e)[j] );    }
-     cout << Date( ) << ": and begin the loop" << endl;
+     if (verbose) cout << Date( ) << ": and begin the loop" << endl;
      vec< triple< pair<int,int>, pair<int,int>, int > > M;
-     #pragma omp parallel for schedule(dynamic, 10000)
+     #pragma omp parallel for num_threads( nthreads ) schedule(dynamic, 10000)
      for ( int v = 0; v < D.N( ); v++ )
      {    vec<vec<int>> paths;
           for ( int j = 0; j < D.From(v).isize( ); j++ )
@@ -2812,6 +3435,11 @@ void MergeShortOverlaps( HyperBasevectorX& hb, vec<int>& inv, digraphE<vec<int>>
                {    int d1 = see[j1], d2 = see[j2];
                     if ( d1 == d2 ) continue;
                     if ( lens[d1] < LOOK_MERGE || lens[d2] < LOOK_MERGE ) continue;
+
+                    // If there is a sequence gap edge with trim, bail out
+
+                    Bool seqgap = DetectSeqGapsWithTrim( D, to_left, to_right, d1 );
+                    seqgap = seqgap || DetectSeqGapsWithTrim( D, to_left, to_right, d2 );                     if ( seqgap ) continue;
 
                     // Look for an overlap of at least LOOK_SEE kmers between
                     // edges d1 and d2.  Give up if there is more than one.
@@ -2870,13 +3498,17 @@ void MergeShortOverlaps( HyperBasevectorX& hb, vec<int>& inv, digraphE<vec<int>>
                               make_pair( dinv[d2], n2-p2-n ), n );    }
                     goto next_v_candidate;    }    }
           next_v_candidate: continue;    }
-     cout << Date( ) << ": sorting merges" << endl;
+     if (verbose){ cout << Date( ) << ": sorting merges; peak mem = " << PeakMemUsageGBString( )
+         << ", mem = "<<MemUsageGBString( )<< endl;}
      ParallelUniqueSort(M);
+     if (verbose){ cout << Date( ) << ": done; peak mem = " << PeakMemUsageGBString( )
+         << ", mem = "<<MemUsageGBString( )<< endl;}
 
      // Make the merges.
 
-     int count = MakeMerges( M, D, dinv );
-     cout << Date( ) << ": made " << count << " merges" << endl;    }
+     int count = MakeMerges( M, D, dinv, verbose );
+     if (verbose){ cout << Date( ) << ": made "<< count << " merges; peak mem = " 
+         << PeakMemUsageGBString( ) << ", mem = "<<MemUsageGBString( )<< endl;}    }
 
 void LineLevelPullApart( const vec<int32_t>& bc, const HyperBasevectorX& hb,
      const vec<int>& inv, const ReadPathVec& paths, const vec<Bool>& dup,
@@ -3136,3 +3768,629 @@ void FlattenSomeBubbles( const HyperBasevectorX& hb, const vec<Bool>& dup,
      cout << Date( ) << ": deleting " << ToStringAddCommas( dels.size( ) )
           << " weak bubble edges" << endl;
      D.DeleteEdges(dels);    }
+
+void MakeTol( const digraphE<vec<int>>& D, const vec<vec<vec<vec<int>>>>& dlines, 
+     vec<int>& tol )
+{    tol.resize_and_set( D.E( ), -1 );
+     for ( int i = 0; i < dlines.isize( ); i++ )
+     for ( int j = 0; j < dlines[i].isize( ); j++ )
+     for ( int k = 0; k < dlines[i][j].isize( ); k++ )
+     for ( int l = 0; l < dlines[i][j][k].isize( ); l++ )
+          tol[ dlines[i][j][k][l] ] = i;    }
+
+void MakeTolFixed( const digraphE<vec<int>>& D, 
+     const vec<vec<vec<vec<int>>>>& dlines, vec<int>& tol )
+{    tol.resize_and_set( D.E( ), -1 );
+     vec<int> to_left, to_right;
+     D.ToLeft(to_left), D.ToRight(to_right);
+     for ( int i = 0; i < dlines.isize( ); i++ )
+     for ( int j = 0; j < dlines[i].isize( ); j++ )
+     for ( int k = 0; k < dlines[i][j].isize( ); k++ )
+     for ( int l = 0; l < dlines[i][j][k].isize( ); l++ )
+          tol[ dlines[i][j][k][l] ] = i;
+     for ( int d = 0; d < D.E( ); d++ )
+     {    if ( tol[d] >= 0 ) continue;
+          int v = to_left[d], w = to_right[d];
+          if ( D.To(v).solo( ) && D.From(w).solo( ) )
+          {    int f1 = D.ITo(v,0), f2 = D.IFrom(w,0);
+               if ( tol[f1] >= 0 && tol[f1] == tol[f2] ) 
+                    tol[d] = tol[f1];    }    }    }
+
+void MakeTol2( const digraphE<vec<int>>& D, const vec<vec<vec<vec<int>>>>& dlines, 
+     vec<pair<int,int>>& tol )
+{    tol.resize( D.E( ), make_pair(-1,-1) );
+     for ( int i = 0; i < dlines.isize( ); i++ )
+     for ( int j = 0; j < dlines[i].isize( ); j++ )
+     for ( int k = 0; k < dlines[i][j].isize( ); k++ )
+     for ( int l = 0; l < dlines[i][j][k].isize( ); l++ )
+          tol[ dlines[i][j][k][l] ] = make_pair( i, j );    }
+
+// Helper function for MergeIdenticalEdges
+// Find identical super edges that emanate from a vertex and mark them
+
+void FindIdenticalEdges( const digraphE<vec<int>> & D, const vec<int> & dinv,
+     const vec<int> & vset, vec<vec<int>> & classes )
+{
+     vec<vec<int>> edges;
+     vec<int> edgeids;
+     for ( auto & v : vset ) {
+          for ( int i = 0; i != D.From(v).isize(); i++ ) {
+               const int d = D.IFrom(v,i);
+               if ( D.O(d)[0] < 0 ) continue;
+               edges.push_back( D.O(d) );
+               edgeids.push_back( d );
+          }
+     }
+     vec<int> index( edges.size(), vec<int>::IDENTITY );
+     SortIndex( edges, index );
+     for ( int i = 0; i != index.isize(); i++ ) {
+          int j = i+1;
+          for (; j < index.isize(); j++ ) {
+               if ( edges[index[i]] != edges[index[j]] )
+                    break;
+          }
+          if ( j-i == 1 ) continue;
+          
+          classes.push_back({});
+          auto & entry = classes.back();
+          for ( int k = i; k < j; k++ ) {
+               const int d = edgeids[index[k]];
+               entry.push_back( d );
+          }
+          
+          i = j-1;
+     }
+}
+
+// Construct the quotient graph by treating as equivalent 
+// any two edges emanating from the same vertex
+// with the same base edge sequence
+
+void MergeIdenticalEdges( digraphE<vec<int>> & D, vec<int> & dinv, const Bool verbose )
+{
+     
+     int64_t zips = 0;
+     int pass = 0;
+     const int MAX_DEPTH=5;
+     vec<int> to_right;
+     do {
+          pass++;
+          cout << Date( ) << ": pass " << pass << ", peak = "
+               << PeakMemUsageGBString() << endl;
+          to_right.clear();
+          D.ToRight(to_right);
+          zips=0;
+          vec<vec<int>> orbits;
+          vec<vec<int>> classes;
+          #pragma omp parallel for schedule (dynamic,1) reduction(+:zips) \
+               firstprivate( classes )
+          for ( int v = 0; v < D.N( ); v++ ) {
+               classes.clear();
+               vec<vec<int>> vsets = {{v}};
+               int prev = 0;
+               set<int> seen;
+               seen.insert(v);
+               for ( int depth = 0; depth != MAX_DEPTH; depth++ ) {
+                    for ( auto & vset : vsets )
+                         FindIdenticalEdges( D, dinv, vset, classes );
+                    
+                    if ( classes.isize() == prev )
+                         break;
+                    vsets.clear();
+                    for ( int j = prev; j != classes.isize(); j++ ) {
+                         vsets.push_back( {} );
+                         auto & vset = vsets.back();
+                         for ( auto & d : classes[j] ) {
+                              const int w = to_right[d];
+                              if ( seen.count(w) ) continue;
+                              vset.push_back( w );
+                         }
+                    }
+
+                    for ( auto & vset : vsets )
+                         for ( auto & w : vset )
+                              seen.insert(w);
+
+                    prev = classes.isize();
+               }
+               if ( classes.empty() ) continue;
+               
+               // make symmetric wrt involution
+
+               const int n = classes.size();
+               classes.resize(2*n);
+               for ( int i = 0; i != n; i++ ) {
+                    const auto & cl = classes[i];
+                    for ( auto & d : cl )
+                         classes[i+n].push_back( dinv[d] );
+               }
+               #pragma omp critical
+               {    orbits.append( classes );     }
+          }
+          
+          if ( orbits.empty() ) break;
+
+          cout << Date( ) << ": computing equivalence from orbits" << endl;
+          ParallelUniqueSort( orbits );
+
+          equiv_rel ee;
+          ee.Initialize( D.E() );
+          
+          for ( auto & cl : orbits ) {
+               if ( cl.size() <= 1 ) continue;
+               for ( int i = 0; i < cl.isize()-1; i++ )
+                    ee.Join( cl[i], cl[i+1] );
+               zips += cl.size() * ( cl.size() - 1 )/2;
+          }
+          CollapseToQuotientGraph( D, dinv, ee, True );
+          cout << Date( ) << ": performed " << ToStringAddCommas(zips)
+               << " zips, peak = " << PeakMemUsageGBString() << endl;
+          cout << Date( ) << ": checksum " << ToStringAddCommas(D.CheckSum()) << endl;
+     } while ( zips > 0 );
+}
+
+// Helper function for ZipperFast
+
+inline Bool IsGapEdgeVertex( const digraphE<vec<int>> & D, const int & v )
+{
+     for ( auto & d : D.IFrom(v) ) {
+          if ( IsSequence( D.O(d) ) )
+               return True;
+     }
+     for ( auto & d : D.ITo(v) ) {
+          if ( IsSequence( D.O(d) ) )
+               return True;
+     }
+     return False;
+}
+
+// Helper function for ZipperFast
+// Identify candidate zips at every vertes and store in a flat data structure
+
+size_t FindZips( const digraphE<vec<int>> & D,
+     const vec<int> & to_left, const vec<int> & to_right, const vec<int> & dinv,
+     vec<quad<int,int,int,int8_t>> & zips, vec<Bool> & skip )
+{
+     size_t zip_count = 0;
+
+     zips.clear();
+     zips.resize( D.N(), make_quad(-1,-1,-1,-1) );
+
+     #pragma omp parallel for schedule (dynamic, 1000)
+     for ( int v = 0; v < D.N(); v++ ) {
+          if ( skip[v] ) continue;
+          // gather edges
+          vec<int> es;
+          vec<int> first;
+          int max = -1;
+          
+          for ( auto & d : D.IFrom(v) ) {
+               if ( D.O(d)[0] < 0 ) continue;
+               es.push_back( d );
+               first.push_back( D.O(d)[0] );
+               max = Max( D.O(d).isize(), max );
+          }
+
+          // if all edges are gaps then nothing to do
+          if ( max == -1 ) continue;
+          
+          // if there's only one edge then nothing to do
+          if ( es.solo() ) continue;
+
+          SortSync( first, es );
+          skip[v] = True;
+          for ( int i = 0; i < es.isize(); i++ ) {
+               int j = i+1;
+               for ( ; j < es.isize(); j++ )
+                    if ( first[i] != first[j] ) break;
+               if ( j == i+1 ) continue;
+               skip[v] = False;
+               // edges from i to j are potential zipper candidates
+
+               for ( int k1 = i; k1 != j; k1++ ) {
+               for ( int k2 = i; k2 != j; k2++ ) {
+                    if ( k1 == k2 ) continue;
+                    const auto & v1 = D.O(es[k1]);
+                    const auto & v2 = D.O(es[k2]);
+                    if ( v1.size() < v2.size() ) continue;
+
+                   
+                    const int d1 = es[k1], d2 = es[k2];
+                    const int rd1 = dinv[d1], rd2 = dinv[d2];
+                    const int v = to_left[d1], w1 = to_right[d1], w2 = to_right[d2];
+                    const int rv = to_right[rd1], rw1 = to_left[rd1], rw2 = to_left[rd2];
+
+                    if ( !IsUnique( d1, d2, rd1, rd2 ) ) continue;
+                    
+                    // v1 length >= v2 length
+                    int pos = 1;
+                    while ( pos < v2.isize() ) {
+                         if ( v1[pos] != v2[pos] )
+                              break;
+                         pos++;
+                    }
+ 
+                    const vec<int> start = { v, w1, w2, rv, rw1, rw2 };
+
+                    // if we have a bubble
+                    if ( w1 == w2 ) {
+                         if ( pos == v2.isize() && pos < v1.isize() )
+                              pos--;
+                         if ( pos == 0 ) continue;
+                         if ( !IsUnique( v, rv, w1, rw1 ) ) continue;
+                    } else if ( !IsUnique( start ) ) continue;
+                    
+                    // Store the topology information
+
+                    int8_t type;
+                    if ( pos < v2.isize() )
+                         type = 1; // both edges are being partially zippered
+                    else if ( pos < v1.isize() ) {
+                         if ( IsGapEdgeVertex( D, w2 ) )
+                              continue;
+                         type = 2; // one edge is completely zippered
+                    } else {
+                         if ( IsGapEdgeVertex( D, w2 ) || IsGapEdgeVertex( D, w1 ) )
+                              continue;
+                         type = 3; // both edges are completely equal
+                    }
+                    zip_count++;
+                    zips[v] = make_quad( es[k1], es[k2], pos, type );
+                    goto next_vertex;
+               }    }
+next_vertex:   i = j - 1;
+          }
+     }
+     
+     return zip_count;
+}
+
+// Kill redundant bubble edges. If two edges have same From and To vertices,
+// AND are EQUAL in terms of base edge vectors, one of them is redundant.
+
+void KillIdenticalBubbles( digraphE<vec<int>> & D, vec<int> & dinv )
+{
+     vec<Bool> to_delete( D.E( ), False );
+     vec<int> to_left, to_right;
+     D.ToLeftParallel( to_left );
+     D.ToRightParallel( to_right );
+
+     vec<triple<int,int,int>> ved;
+     #pragma omp parallel for schedule(dynamic,1000) firstprivate(ved)
+     for ( int v = 0; v < D.N(); v++ ) {
+          ved.clear();
+          for ( int i = 0; i != D.From(v).isize(); i++ ) {
+               const int d = D.IFrom(v,i), w = D.From(v)[i], e = D.O(d)[0];
+               if ( e < 0 ) continue;
+               ved.push( w, e, d );
+          }
+          Sort( ved );
+          for ( int i = 0; i < ved.isize(); i++ ) {
+               int j = i+1;
+               for ( ; j < ved.isize(); j++ ) {
+                    if ( ved[j].first != ved[i].first || 
+                         ved[j].second != ved[i].second )
+                         break;
+               }
+               if ( j - i >= 2 ) {
+                    for ( int k1 = i; k1 < j; k1++ ) {
+                         const int & d1 = ved[k1].third;
+                         if ( to_delete[d1] ) continue;
+                         for ( int k2 = k1+1; k2 < j; k2++ ) {
+                              const int & d2 = ved[k2].third;
+                              if ( to_delete[d2] ) continue;
+                              const auto & v1 = D.O(d1);
+                              const auto & v2 = D.O(d2);
+                              if ( v1 == v2 )
+                                   to_delete[d2] = True;
+                         }
+                    }
+               }
+
+          }
+     }
+     #pragma omp parallel for 
+     for ( int d = 0; d < D.E( ); d++ ) {
+          const int rd = dinv[d];
+          if ( d < rd ) continue;
+          if ( rd != d && to_left[d] == to_left[rd] && to_right[d] == to_right[rd] ) {
+               to_delete[d] = False;
+               to_delete[rd] = False;
+          } else if ( to_delete[d] != to_delete[dinv[d]] ) {
+               to_delete[d]=True;
+               to_delete[dinv[d]]=True;
+          }
+     }
+     int dels = 0;
+     #pragma omp parallel for reduction(+:dels)
+     for ( int d = 0; d < D.E( ); d++ ) {
+          if ( to_delete[d] )
+               dels++;
+     }
+     D.DeleteEdgesParallel( to_delete );
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );
+     cout << Date( ) << ": deleted " << ToStringAddCommas( dels ) 
+          << " redundant bubbles" << endl;
+     
+}
+
+// Helper function for ZipperFast
+// Which vertices DO NOT have any zipper opportunity
+
+void FindCandidateVertices( const digraphE<vec<int>> & D, const int start, const int stop,
+     vec<Bool> & skip )
+{    skip.resize( stop, True );
+     set<int> first;
+     #pragma omp parallel for schedule(dynamic,1000) firstprivate( first )
+     for ( int v = start; v < stop; v++ ) {
+          first.clear();
+          for ( auto & d : D.IFrom(v) ) {
+               const int e = D.O(d)[0];
+               if ( e < 0 ) continue;
+               if ( first.count( e ) ) {
+                    skip[v] = False;
+                    break;
+               } else
+                    first.insert( e );
+          }
+     }    
+}
+
+// Fast version of Zipper that works well with very un-zippered graphs
+// Looks for potential zipper opportunities at each vertex (in ||lel)
+// Loop through all zipper opportunities and select (SERIAL)
+// Create new edges and vertices ( SERIAL )
+// Make all graph edits in parallel.
+
+void ZipperFast( digraphE<vec<int>> & D, vec<int> & dinv, const Bool verbose )
+{
+     const Bool debug = False;
+     cout << Date( ) << ": begin zippering" << endl;
+     cout << Date( ) << ": finding redundant bubbles" << endl;
+     KillIdenticalBubbles( D, dinv );
+
+     vec<int> to_left, to_right;
+     int pass = 0;
+     size_t total_zips = 0;
+     size_t total_edits = 0;
+
+     // Store the zippers that we found, one for each vertex
+     vec<quad<int,int,int,int8_t>> zips;
+
+     // Information about the new vertices,edges we need
+     vec<pair<int,int>> edits;
+     
+     // Mark which zips have already been performed
+     vec<Bool> processed(D.N(), False);
+     vec<Bool> skip( D.N(), True );
+
+     cout << Date( ) << ": making multiple passes";
+     if ( verbose && !debug )
+          cout << ", a dot for 20 passes";
+     cout << endl;
+     D.ToLeftParallel( to_left );
+     D.ToRightParallel( to_right );
+
+     int prev_N = 0;
+     // BEGIN MULTIPLE PASSES
+     while ( True ) {
+     pass++;
+
+     if ( debug ) cout << Date( ) << ": pass " << pass << endl;
+     
+     processed.clear();
+     processed.resize( D.N(), False );
+     
+     if ( debug ) cout << Date( ) << ": finding zips" << endl;
+
+     // Find vertices that can be skipped
+     
+     FindCandidateVertices( D, prev_N, D.N(), skip );
+     prev_N = D.N();
+
+     // Find zippers at each vertex of the graph
+     
+     size_t num_zips = FindZips( D, to_left, to_right, dinv, zips, skip );
+     if ( num_zips == 0 ) break;
+     total_zips += num_zips;
+     if ( debug )
+          cout << Date( ) << ": found zips at " << ToStringAddCommas(num_zips) << " of "
+               << ToStringAddCommas(D.N()) << " vertices" << endl;
+     
+     // Unique sort to put all the -1,-1,-1,-1 at the beginning
+     // so the first element is always invalid
+     
+     ParallelUniqueSort( zips );
+     const int first_zip = ( zips[0].first == -1 ? 1 : 0 );
+
+     // Plan out edits to the graph
+     
+     if ( debug )
+          cout << Date( ) << ": creating edges and vertices" << endl;
+     
+     // Loop through all the zips in a SINGLE thread and figure out which ones
+     // we are going to implement in this pass
+     
+     edits.clear();
+     edits.resize( zips.size(), make_pair( -1, -1 ) );
+     const int prev_E = D.E();
+     int vcount = D.N(), ecount = D.E();
+     int edit_count = 0;
+     vec<int> touch;
+     for ( int zi = first_zip; zi != zips.isize(); zi++ ) {
+          const int & d1 = zips[zi].first, & d2 = zips[zi].second, & pos = zips[zi].third;
+          const int8_t & type = zips[zi].fourth;     
+          const int & rd1 = dinv[d1], & rd2 = dinv[d2];
+          const int & w2 = to_right[d2], & rw2 = to_left[rd2];
+          const int & w1 = to_right[d1], & rw1 = to_left[rd1];
+          const int & v = to_left[d1], & rv = to_right[rd1];
+
+          const vec<int> start = {v, w1, w2, rv, rw1, rw2};
+          touch.clear();
+          for ( auto & x : start ) {
+               if ( processed[x] )
+                    goto next_zip;
+               touch.append( D.From(x) );
+               touch.append( D.To(x) );
+          }
+          
+          if ( type == 1 ) {
+               edits[zi] = make_pair( vcount, ecount );
+               edit_count++;
+               
+               for ( auto & x : start ) {
+                    processed[x] = True;
+                    skip[x] = False;
+               }
+               vcount += 2;
+               ecount += 2;
+          } else {
+               for ( auto & x : touch )
+                    if ( processed[x] )
+                         goto next_zip;
+
+               if ( type == 2 ) {
+                    edits[zi] = make_pair( vcount, 0 );
+                    vcount += 2;
+               } else 
+                    edits[zi] = make_pair( 0, 0 );
+               edit_count++;
+               
+               for ( auto & x : touch ) {
+                    processed[x] = True;
+                    skip[x] = False;
+               }
+          }
+
+next_zip: continue;
+     }
+
+     // Create the new vertices and edges we need for the edits
+     D.AddVertices( vcount - prev_N);
+     auto & edges = D.EdgesMutable();
+     auto & from = D.FromMutable(), & to = D.ToMutable();
+     auto & ifrom = D.FromEdgeObjMutable(), & ito = D.ToEdgeObjMutable();
+     edges.resize( ecount, {} );
+     to_left.resize( ecount, -1 );
+     to_right.resize( ecount, -1 );
+     dinv.resize( ecount, -1 );
+     
+     if ( debug )
+          cout << Date( ) << ": making " << ToStringAddCommas(edit_count) 
+               << " edits" << endl;
+     total_edits += edit_count;
+
+     #pragma omp parallel for schedule(dynamic, 1000)
+     for ( int zi = first_zip; zi < zips.isize(); zi++ ) {
+          const auto & z = zips[zi];
+          const int N = edits[zi].first, E = edits[zi].second;
+
+          if ( N < 0 ) continue;
+          
+          // len d1 >= len d2
+          const int d1 = z.first, d2 = z.second, match = z.third;
+          const int rd1 = dinv[d1], rd2 = dinv[d2];
+          const int w2 = to_right[d2], rw2 = to_left[rd2];
+          const int w1 = to_right[d1], rw1 = to_left[rd1];
+          const int origin = to_left[d1], rorigin = to_right[rd1];
+          
+          if ( E > 0 ) {
+               from[origin].push_back( N );
+               to[N].push_back( origin );
+
+               ifrom[origin].push_back( E );
+               ito[N].push_back( E );
+               
+               from[N+1].push_back( rorigin );
+               to[rorigin].push_back( N+1 );
+
+               ifrom[N+1].push_back( E+1 );
+               ito[rorigin].push_back( E+1 );
+               
+               to_left[E] = origin;
+               to_right[E] = N;
+
+               to_left[E+1] = N+1;
+               to_right[E+1] = rorigin;
+
+               dinv[E] = E+1;
+               dinv[E+1] = E;
+          }
+
+          vec<int> & eo1 = D.OMutable( d1 ), & eo2 = D.OMutable( d2 );
+          vec<int> & reo1 = D.OMutable( rd1 ), & reo2 = D.OMutable( rd2 );
+          const int l1 = eo1.size(), l2 = eo2.size();
+
+          if ( match < l2 ) {
+               vec<int> & zipped = D.OMutable( E ), & rzipped = D.OMutable( E+1 );
+               // common base edges
+               zipped.SetToSubOf( eo1, 0, match );
+               rzipped.SetToSubOf( reo1, reo1.isize()-match, match );
+          } 
+
+          if ( match < l1 ) {
+               for ( int i = match; i < l1; i++ )
+                    eo1[i-match] = eo1[i];
+               eo1.resize( l1-match );
+               reo1.resize( l1-match );
+          }
+
+          if ( match < l2 ) {
+               for ( int i = match; i < l2; i++ )
+                    eo2[i-match] = eo2[i];
+               eo2.resize( l2-match );
+               reo2.resize( l2-match );
+          }
+
+          if ( match < l2 ) {
+               D.GiveEdgeNewFromVxWithUpdate( d1, origin, N, to_left );
+               D.GiveEdgeNewFromVxWithUpdate( d2, origin, N, to_left );
+
+               D.GiveEdgeNewToVxWithUpdate( rd1, rorigin, N+1, to_right );
+               D.GiveEdgeNewToVxWithUpdate( rd2, rorigin, N+1, to_right );
+          } else if ( match < l1 ) {
+               // We should never have a bubble here
+               ForceAssert( w1 != w2 );
+               D.GiveEdgeNewFromVxWithUpdate( d1, origin, N, to_left );
+               D.GiveEdgeNewToVxWithUpdate( rd1, rorigin, N+1, to_right );
+               
+
+               D.TransferEdgesWithUpdate( w2, N, to_left, to_right, False ); 
+               D.TransferEdgesWithUpdate( rw2, N+1, to_left, to_right, False );
+          } else {
+               const int j = Position( D.IFrom(origin), d2 );
+               const int rj = Position( D.ITo(rorigin), rd2 );
+               D.DeleteEdgeFrom( origin, j );
+               D.DeleteEdgeTo( rorigin, rj );
+               to_left[d2] = to_right[d2] = -1;
+               to_left[rd2] = to_right[rd2] = -1;
+               if ( w1 != w2 ) {
+                    D.TransferEdgesWithUpdate( w2, w1, to_left, to_right, False );
+                    D.TransferEdgesWithUpdate( rw2, rw1, to_left, to_right, False );
+               }
+          }
+     }
+     if ( !debug && verbose ) {
+          if ( pass % 20 == 0 ) {
+               cout << ".";
+               flush(cout);
+          }
+          if ( pass % 1000 == 0 )
+               cout << endl;
+          else if ( pass % 200 == 0 )
+               cout << " ";
+     }
+     // END MULTIPLE PASSES
+     }
+     if ( debug ) cout << Date( ) << ": clean up" << endl;
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );
+     pass--;
+     if ( verbose && pass % 1000 != 0 )
+          cout << endl;
+     cout << Date( ) << ": performed " << ToStringAddCommas( total_edits )
+          << " edits in " << pass << " passes" << endl;
+}

@@ -1,0 +1,47 @@
+#
+# Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
+#
+
+filetype fofn;
+filetype txt;
+filetype bv;
+
+filetype fastq;
+filetype fastq.gz;
+
+filetype perm;
+filetype msp;
+filetype sedge_asm;
+filetype sedge_bcs;
+
+filetype graph;
+filetype node_bcs;
+
+stage MSP(
+    in  int         trim_min_qual,
+    in  fastq.gz[]  fastqs,
+    in  txt         barcode_whitelist,
+    out msp[]       chunks,
+    src exec        "tada martian msp",
+) split using (
+    in  perm     permutation,
+    in  fastq.gz chunk,
+)
+
+stage SHARD_ASM(
+    in  int         min_kmer_obs,
+    in  msp[]       chunks,
+    out sedge_asm[] sedge_asm,
+    out sedge_bcs[] sedge_bcs,
+    src exec        "tada martian shard-asm",
+) split using (
+    in  int chunk_id,
+    in  int total_chunks,
+)
+
+stage MAIN_ASM_SN(
+    in  sedge_asm[]  sedge_asm,
+    in  sedge_bcs[]  sedge_bcs,
+    out bv           asm_graph,
+    src exec         "tada martian main-asm-sn",
+) split using ()

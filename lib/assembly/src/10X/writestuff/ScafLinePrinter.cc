@@ -286,6 +286,7 @@ void ScafLinePrinter::BustMegabubble( FastaEdgeWriter& fw, vec<vec<int>> const& 
      UniqueSort(lines);
 
      for ( auto const linei: lines )  {
+          fw.Index();
           ExpandDLine( fw, linei );
           fw.Break();  // bustable megabubbles are odd cells, so can't be terminal
      }
@@ -330,6 +331,7 @@ void ScafLinePrinter::WalkScaffoldLines( FastaEdgeWriter& fw, size_t choose /* =
                     for ( size_t armi = start_cell; armi < end_cell; ++armi )  {
                          fwLog(fw, "Scaffold Line " << linei << ", expanding cell " << celli <<
                              ", megabubble cell arm " << armi+1 << " of " << cell.size() << endl);
+                         fw.Index();
                          ExpandMegabubbleArm(fw, cell[armi]);
                     }
                }

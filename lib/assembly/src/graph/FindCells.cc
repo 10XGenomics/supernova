@@ -13,6 +13,7 @@
 #include <set>
 
 #include "CoreTools.h"
+#include "Set.h"
 #include "graph/Digraph.h"
 #include "graph/FindCells.h"
 
@@ -196,103 +197,133 @@ void FindSomeCells( const digraph& G, const int max_cell_size,
      const int max_depth, vec< pair<int,int> >& bounds )
 {
      bounds.clear( );
-     #pragma omp parallel for
+     #pragma omp parallel for schedule(dynamic, 1000)
      for ( int v = 0; v < G.N( ); v++ )
      {    
-          // Consider only canonical cell entry vertices v.
+          vec<int> depths = { max_depth/4, max_depth/2, max_depth };
+          for ( auto dp : depths )
+          {
+               // Consider only canonical cell entry vertices v.
 
-          if ( !G.To(v).solo( ) || G.From(v).size( ) <= 1 ) continue;
-          if ( Member( G.From(v), v ) ) continue;
+               if ( !G.To(v).solo( ) || G.From(v).size( ) <= 1 ) continue;
+               if ( Member( G.From(v), v ) ) continue;
           
-          // Find vertices a bit downstream of the immediate successors of v.
+               // Find vertices a bit downstream of the immediate successors of v.
 
-          int no = G.From(v).size( );
-          vec<vec<int>> down(no), downd(no);
-          for ( int j = 0; j < no; j++ )
-          {    down[j].push_back( G.From(v)[j] );
-               downd[j].push_back(0);
-               for ( int i = 0; i < down[j].isize( ); i++ )
-               {    if ( downd[j][i] == max_depth ) break;
-                    for ( int l = 0; l < G.From( down[j][i] ).isize( ); l++ )
-                    {    int w = G.From( down[j][i] )[l], d = downd[j][i] + 1;
-                         int p = Position( down[j], w );
-                         if ( p < 0 || downd[j][p] > d )
-                         {    down[j].push_back(w);
-                              downd[j].push_back(d);    }    }    }
-               UniqueSort( down[j] );    }
+               int no = G.From(v).size( );
+               vec<vec<int>> down(no), downd(no);
+               for ( int j = 0; j < no; j++ )
+               {    down[j].push_back( G.From(v)[j] );
+                    downd[j].push_back(0);
+                    for ( int i = 0; i < down[j].isize( ); i++ )
+                    {    if ( downd[j][i] == dp ) break;
+                         for ( int l = 0; l < G.From( down[j][i] ).isize( ); l++ )
+                         {    int w = G.From( down[j][i] )[l], d = downd[j][i] + 1;
+                              int p = Position( down[j], w );
+                              if ( p < 0 || downd[j][p] > d )
+                              {    down[j].push_back(w);
+                                   downd[j].push_back(d);    }    }    }
+                    UniqueSort( down[j] );    }
 
-          // Find candidates for canonical cell exit vertices w.
+               // Find candidates for canonical cell exit vertices w.
+     
+               vec<int> ex;
+               Intersection( down, ex );
+               vec<Bool> to_del( ex.size( ), True );
+               for ( int i = 0; i < ex.isize( ); i++ )
+               {    int w = ex[i];
+                    if ( !G.From(w).solo( ) || G.To(w).size( ) <= 1 ) continue;
+                    if ( Member( G.To(w), w ) ) continue;
 
-          vec<int> ex;
-          Intersection( down, ex );
-          vec<Bool> to_del( ex.size( ), True );
-          for ( int i = 0; i < ex.isize( ); i++ )
-          {    int w = ex[i];
-               if ( !G.From(w).solo( ) || G.To(w).size( ) <= 1 ) continue;
-               if ( Member( G.To(w), w ) ) continue;
-               to_del[i] = False;    }
-          EraseIf( ex, to_del );
+                    // Check to see if we're at a standard bubble.
 
-          // Test candidates.
+                    if ( G.To(w).size( ) == 2 && G.To(w)[0] == G.To(w)[1] )
+                    {    int x = G.To(w)[0];
+                         if ( x != v && G.To(x).solo( ) && G.From(x).size( ) == 2 )
+                              continue;    }
+                    to_del[i] = False;    }
+               EraseIf( ex, to_del );
 
-          vec<int> ex2;
-          vec<vec<int>> xs;
-          for ( int i = 0; i < ex.isize( ); i++ )
-          {    int w = ex[i];
+               // Test candidates.
 
-               // Check for bounding of cell by v..w, and check cell size.
-
-               vec<int> x = {v};
-               Bool bad = False;
-               for ( int j = 0; j < x.isize( ); j++ )
-               {    if ( x.isize( ) > max_cell_size || G.From( x[j] ).empty( )
-                         || G.To( x[j] ).empty( ) )
-                    {    bad = True;
-                         break;    }
-                    if ( x[j] != w )
-                    {    for ( int l = 0; l < G.From( x[j] ).isize( ); l++ )
-                         {    int t = G.From( x[j] )[l];
-                              if ( t == v )
-                              {    bad = True;
-                                   break;    }
-                              if ( !Member( x, t ) ) x.push_back(t);    }    }
-                    if ( x[j] != v )
-                    {    for ( int l = 0; l < G.To( x[j] ).isize( ); l++ )
-                         {    int t = G.To( x[j] )[l];
-                              if ( t == w )
-                              {    bad = True;
-                                   break;    }
-                              if ( !Member( x, t ) ) x.push_back(t);    }    }    }
-               if ( bad || x.isize( ) > max_cell_size ) continue;
-
-               // Check for cycles.
-
-               for ( int j = 0; j < x.isize( ); j++ )
-               {    if (bad) break;
-                    if ( x[j] == w ) continue;
-                    vec<int> m = { x[j] };
-                    for ( int l = 0; l < m.isize( ); l++ )
+               vec<int> ex2;
+               vec<vec<int>> xs;
+               int top = max_cell_size;
+               for ( int i = 0; i < ex.isize( ); i++ )
+               {    int w = ex[i];
+     
+                    // Check for bounding of cell by v..w, and check cell size.
+                    //
+                    // Starting from v, extend by walking in both directions, but
+                    // do not go backwards from v or forwards from w.  Give up if
+                    // we accumulate more than max_cell_size vertices, or if we 
+                    // encounter a source or sink, or if we find certain cycles.
+     
+                    vec<int> x = {v};
+                    set<int> X;
+                    X.insert(v);
+                    Bool bad = False;
+                    for ( int j = 0; j < x.isize( ); j++ )
+                    {    if ( x.isize( ) > top || G.From( x[j] ).empty( )
+                              || G.To( x[j] ).empty( ) )
+                         {    bad = True;
+                              break;    }
+                         if ( x[j] != w )
+                         {    for ( int l = 0; l < G.From( x[j] ).isize( ); l++ )
+                              {    int t = G.From( x[j] )[l];
+                                   if ( t == v )
+                                   {    bad = True;
+                                        break;    }
+                                   if ( !Member( X, t ) ) 
+                                   {    x.push_back(t);    
+                                        X.insert(t);    }    }
+                              if (bad) break;    }
+                         if ( x[j] != v )
+                         {    for ( int l = 0; l < G.To( x[j] ).isize( ); l++ )
+                              {    int t = G.To( x[j] )[l];
+                                   if ( t == w )
+                                   {    bad = True;
+                                        break;    }
+                                   if ( !Member( X, t ) ) 
+                                   {    x.push_back(t);    
+                                        X.insert(t);    }    }
+                              if (bad) break;    }    }
+                    if ( bad || x.isize( ) > top ) continue;
+     
+                    // Check for cycles.
+     
+                    for ( int j = 0; j < x.isize( ); j++ )
                     {    if (bad) break;
-                         for ( int r = 0; r < G.From( m[l] ).isize( ); r++ )
-                         {    int z = G.From( m[l] )[r];
-                              if ( z == x[j] )
-                              {    bad = True;
-                                   break;    }
-                              if ( z == w ) continue;
-                              if ( !Member( m, z ) ) m.push_back(z);    }    }    }
-               if (bad) continue;
-               xs.push_back(x);
-               ex2.push_back(w);    }
-
-          // Pick smallest.
-
-          if ( ex2.empty( ) ) continue;
-          vec<int> len( xs.size( ) ), ids( xs.size( ), vec<int>::IDENTITY );
-          for ( int i = 0; i < xs.isize( ); i++ )
-               len[i] = xs[i].size( );
-          SortSync( len, ids );
-          if ( ex2.size( ) >= 2 && len[0] == len[1] ) continue; // possible???
-          int w = ex2[ ids[0] ];
-          #pragma omp critical
-          {    bounds.push( v, w );    }    }
+                         if ( x[j] == w ) continue;
+                         vec<int> m = { x[j] };
+                         set<int> M;
+                         M.insert( x[j] );
+                         for ( int l = 0; l < m.isize( ); l++ )
+                         {    if (bad) break;
+                              for ( int r = 0; r < G.From( m[l] ).isize( ); r++ )
+                              {    int z = G.From( m[l] )[r];
+                                   if ( z == x[j] )
+                                   {    bad = True;
+                                        break;    }
+                                   if ( z == w ) continue;
+                                   if ( !Member( M, z ) ) 
+                                   {    m.push_back(z);    
+                                        M.insert(z);    }    }    }    }
+                    if (bad) continue;
+                    xs.push_back(x);
+                    top = Min( top, x.isize( ) );
+                    ex2.push_back(w);    }
+     
+               // Pick smallest.
+     
+               if ( ex2.empty( ) ) continue;
+               vec<int> len( xs.size( ) ), ids( xs.size( ), vec<int>::IDENTITY );
+               for ( int i = 0; i < xs.isize( ); i++ )
+                    len[i] = xs[i].size( );
+               SortSync( len, ids );
+               if ( ex2.size( ) >= 2 && len[0] == len[1] ) break; // possible???
+               int w = ex2[ ids[0] ];
+               #pragma omp critical
+          {    bounds.push( v, w );    }
+               break;    }    }
      Sort(bounds);    }

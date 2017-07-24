@@ -65,7 +65,8 @@ template<int K> void RefAlignCore(
 
      // More control.
 
-     const Bool allow_second_best
+     const Bool allow_second_best,
+     const Bool optb
 )
 {
      // Heuristics.
@@ -79,6 +80,32 @@ template<int K> void RefAlignCore(
      const int MAX_ADD = 2000;
      const int MAX_LOCS_DIFF = 100;
      const int BW_ADD = 10;
+
+     // Sanity check input.
+
+     if ( X.nonempty( ) && X[0] < 0 )
+     {    
+          #pragma omp critical
+          {    cout << "\nInternal error.  RefAlignCore appears to have been passed "
+                    << "a gap edge.\n" << endl;
+               TracebackThisProcess( );
+               Scram(0);    }    }
+     for ( auto e : X )
+     {    if ( e >= inv.isize( ) )
+          {    
+               #pragma omp critical
+               {    cout << "\nInternal error.  RefAlignCore appears to have been "
+                         << "passed a non-current inv.\n" << endl;
+                    TracebackThisProcess( );
+                    Scram(0);    }    }
+          if ( e < 0 )
+          {    
+               #pragma omp critical
+               {    cout << "\nInternal error.  RefAlignCore appears to have been "
+                         << "passed a scrambled X, found the value " << e << ".\n" 
+                         << endl;
+                    TracebackThisProcess( );
+                    Scram(0);    }    }    }
 
      // Define some functions.
 
@@ -335,15 +362,17 @@ template<int K> void RefAlignCore(
                {    from[N-2].push_back(i), to[i].push_back(N-2);
                     from_edge_obj[N-2].push_back( edges.size( ) );
                     to_edge_obj[i].push_back( edges.size( ) );
-                    edges.push_back( sqrt( Squarex( M[i].first.Start( ) ) +
-                         Squarex( M[i].second.Start( ) ) ) );    }
+                    double sum = Squarex( M[i].first.Start( ) );
+                    if ( !optb ) sum += Squarex( M[i].second.Start( ) );
+                    edges.push_back( sqrt(sum) );    }
                for ( int i = 0; i < M.isize( ); i++ )
                {    from[i].push_back(N-1), to[N-1].push_back(i);
                     from_edge_obj[i].push_back( edges.size( ) );
                     to_edge_obj[N-1].push_back( edges.size( ) );
-                    edges.push_back( sqrt(
-                         Squarex( B.isize( ) - M[i].first.Stop( ) ) +
-                         Squarex( G.isize( ) - M[i].second.Stop( ) ) ) );    }
+                    double sum = Squarex( B.isize( ) - M[i].first.Stop( ) );
+                    if ( !optb )
+                         sum += Squarex( G.isize( ) - M[i].second.Stop( ) );
+                    edges.push_back( sqrt(sum) );    }
                for ( int i = 0; i < N; i++ )
                {    SortSync( from[i], from_edge_obj[i] );
                     SortSync( to[i], to_edge_obj[i] );    }
@@ -566,7 +595,7 @@ void RefAlign(
      const int mismatch_penalty = 3;
      const int gap_open_penalty = 12;
      const int gap_extend_penalty = 1;
-     const int batch = 100;
+     const int batch = 1;
      #pragma omp parallel for schedule(dynamic, 1)
      for ( int bi = 0; bi < ds.isize( ); bi += batch )
      {    RefAlignScratch<K> scr;
@@ -622,6 +651,9 @@ void RefAlign(
                     {    galigns[d] = galigns[ ds[p] ];
                          for ( int j = 0; j < (int) galigns[d].size( ); j++ )
                               galigns[d][j].chr *= -1;    }    }    }    }
+
+     // Destroy all since it isn't used beyond this
+     Destroy( all );
 
      // Try to fill in bubbles.
 
@@ -812,111 +844,139 @@ void RefAlign(
 
      // Report stats.
 
-     int bins = 4;
-     vec<int> total(bins,0), aligned(bins,0), multiply(bins,0);
-     for ( int d = 0; d < D.E( ); d++ )
-     {    if ( !used[d] || D.O(d)[0] < 0 ) continue;
-          if ( dlens[d] < 250 )
-          {    total[0]++;
-               if ( galigns[d].size( ) > 0 ) aligned[0]++;
-               if ( galigns[d].size( ) > 1 ) multiply[0]++;    }
-          else if ( dlens[d] < 500 )
-          {    total[1]++;
-               if ( galigns[d].size( ) > 0 ) aligned[1]++;
-               if ( galigns[d].size( ) > 1 ) multiply[1]++;    }
-          else if ( dlens[d] < 1000 )
-          {    total[2]++;
-               if ( galigns[d].size( ) > 0 ) aligned[2]++;
-               if ( galigns[d].size( ) > 1 ) multiply[2]++;    }
-          else
-          {    total[3]++;
-               if ( galigns[d].size( ) > 0 ) aligned[3]++;
-               if ( galigns[d].size( ) > 1 ) multiply[3]++;    }    }
-     auto per = [&]( double n, double d )
-     {    ostringstream out;
-          out << fixed << setprecision(2) << setw(5) << right << 100*n/d;
-          return out.str( );    };
-     vec<vec<String>> rows;
-     cout << "\n// SUMMARY OF REFERENCE ALIGNMENTS" << endl;
-     vec<String> titles = { "// 1 - 249", "// 250-499", "// 500-999", "// 1000 -" };
-     rows.push( vec<String>( { "// kmers", "count", "%aligned", "%multiply" } ) );
-     for ( int j = 0; j < bins; j++ )
-     {    rows.push( vec<String>( { titles[j], ToStringAddCommas(total[j]),
-               per(aligned[j],total[j]), per(multiply[j],total[j]) } ) );    }
-     PrintTabular( cout, rows, 2, "lrrr" );
+     if ( verbosity >= 1 )
+     {    int bins = 4;
+          vec<int> total(bins,0), aligned(bins,0), multiply(bins,0);
+          for ( int d = 0; d < D.E( ); d++ )
+          {    if ( !used[d] || D.O(d)[0] < 0 ) continue;
+               if ( dlens[d] < 250 )
+               {    total[0]++;
+                    if ( galigns[d].size( ) > 0 ) aligned[0]++;
+                    if ( galigns[d].size( ) > 1 ) multiply[0]++;    }
+               else if ( dlens[d] < 500 )
+               {    total[1]++;
+                    if ( galigns[d].size( ) > 0 ) aligned[1]++;
+                    if ( galigns[d].size( ) > 1 ) multiply[1]++;    }
+               else if ( dlens[d] < 1000 )
+               {    total[2]++;
+                    if ( galigns[d].size( ) > 0 ) aligned[2]++;
+                    if ( galigns[d].size( ) > 1 ) multiply[2]++;    }
+               else
+               {    total[3]++;
+                    if ( galigns[d].size( ) > 0 ) aligned[3]++;
+                    if ( galigns[d].size( ) > 1 ) multiply[3]++;    }    }
+          auto per = [&]( double n, double d )
+          {    ostringstream out;
+               out << fixed << setprecision(2) << setw(5) << right << 100*n/d;
+               return out.str( );    };
+          vec<vec<String>> rows;
+          cout << "\n// SUMMARY OF REFERENCE ALIGNMENTS" << endl;
+          vec<String> titles 
+               = { "// 1 - 249", "// 250-499", "// 500-999", "// 1000 -" };
+          rows.push( vec<String>( 
+               { "// kmers", "count", "%aligned", "%multiply" } ) );
+          for ( int j = 0; j < bins; j++ )
+          {    rows.push( vec<String>( { titles[j], ToStringAddCommas(total[j]),
+                    per(aligned[j],total[j]), per(multiply[j],total[j]) } ) );    }
+          PrintTabular( cout, rows, 2, "lrrr" );
 
-     // Test for compatibility.  Note that we only test to see if the reference
-     // intervals overlap sanely.  We do not look at the alignments themselves,
-     // beyond the intervals that they define.
+          // Test for compatibility.  Note that we only test to see if the reference
+          // intervals overlap sanely.  We do not look at the alignments themselves,
+          // beyond the intervals that they define.
 
-     int looked = 0, compat = 0;
-     vec< pair<int,int> > incompats;
-     vec<Bool> bad( D.E( ), False );
-     for ( int d1 = 0; d1 < D.E( ); d1++ )
-     {    if ( galigns[d1].size( ) != 1 ) continue;
-          int v = to_right[d1];
-          for ( int j = 0; j < D.From(v).isize( ); j++ )
-          {    int d2 = D.IFrom(v,j);
-               if ( galigns[d2].size( ) != 1 ) continue;
-               int chr1 = galigns[d1][0].chr, chr2 = galigns[d2][0].chr;
-               align a1 = galigns[d1][0].a, a2 = galigns[d2][0].a;
-               int f1 = d1, f2 = d2;
-               Bool compatible = False;
-               looked++;
-               if ( chr1 == chr2 )
-               {    if ( chr1 < 0 )
-                    {    swap( a1, a2 );
-                         swap( f1, f2 );
-                         f1 = dinv[f1], f2 = dinv[f2];    }
-                    if ( a1.Pos2( ) - a2.pos2( ) == HBK - 1 )
-                         compatible = True;    }
-               if (compatible) compat++;
-               else 
-               {    incompats.push( d1, d2 );    
-                    bad[d1] = bad[d2] = True;    }    }    }
-     cout << "// weakly compatible abutting solo placements: " 
-          << per(compat, looked) << "%" << endl;
-     vec<int> unaligned;
-     for ( int d = 0; d < D.E( ); d++ )
-     {    if ( !used[d] || D.O(d)[0] < 0 ) continue;
-          if ( galigns[d].size( ) > 0 ) continue;
-          unaligned.push_back(d);
-          bad[d] = True;    }
-     int64_t total_kmers = 0, good = 0;
-     for ( int d = 0; d < D.E( ); d++ )
-     {    total_kmers += dlens[d];
-          if ( !bad[d] ) good += dlens[d];    }
-     cout << "// kmers aligned uniquely and consistently: "
-          << PERCENT_RATIO( 3, good, total_kmers ) << endl;
+          int looked = 0, compat = 0;
+          vec< pair<int,int> > incompats;
+          vec<Bool> bad( D.E( ), False );
+          for ( int d1 = 0; d1 < D.E( ); d1++ )
+          {    if ( galigns[d1].size( ) != 1 ) continue;
+               int v = to_right[d1];
+               for ( int j = 0; j < D.From(v).isize( ); j++ )
+               {    int d2 = D.IFrom(v,j);
+                    if ( galigns[d2].size( ) != 1 ) continue;
+                    int chr1 = galigns[d1][0].chr, chr2 = galigns[d2][0].chr;
+                    align a1 = galigns[d1][0].a, a2 = galigns[d2][0].a;
+                    int f1 = d1, f2 = d2;
+                    Bool compatible = False;
+                    looked++;
+                    if ( chr1 == chr2 )
+                    {    if ( chr1 < 0 )
+                         {    swap( a1, a2 );
+                              swap( f1, f2 );
+                              f1 = dinv[f1], f2 = dinv[f2];    }
+                         if ( a1.Pos2( ) - a2.pos2( ) == HBK - 1 )
+                              compatible = True;    }
+                    if (compatible) compat++;
+                    else 
+                    {    incompats.push( d1, d2 );    
+                         bad[d1] = bad[d2] = True;    }    }    }
+          cout << "// weakly compatible abutting solo placements: " 
+               << per(compat, looked) << "%" << endl;
+          vec<int> unaligned;
+          for ( int d = 0; d < D.E( ); d++ )
+          {    if ( !used[d] || D.O(d)[0] < 0 ) continue;
+               if ( galigns[d].size( ) > 0 ) continue;
+               unaligned.push_back(d);
+               bad[d] = True;    }
+          int64_t total_kmers = 0, good = 0;
+          for ( int d = 0; d < D.E( ); d++ )
+          {    total_kmers += dlens[d];
+               if ( !bad[d] ) good += dlens[d];    }
+          cout << "// kmers aligned uniquely and consistently: "
+               << PERCENT_RATIO( 3, good, total_kmers ) << endl;
 
-     // Compute alignment error rate.
+          // Compute alignment error rate.
 
-     int64_t total_bases = 0, total_errs = 0;
-     #pragma omp parallel for schedule(dynamic, 1000)
-     for ( int d = 0; d < D.E( ); d++ )
-     {    if ( galigns[d].empty( ) ) continue;
-          const refalign& r = galigns[d][0];
-          int chr = r.chr;
-          if ( chr < 0 ) continue;
-          const align& a = r.a;
-          const basevector B = Cat( D.O(d) );
-          const basevector& G = genome[chr-1];
-          int p1 = a.pos1( ), p2 = a.pos2( );
-          int errs = 0;
-          for ( int j = 0; j < a.Nblocks( ); j++ )
-          {    if ( a.Gaps(j) > 0 ) p2 += a.Gaps(j);
-               if ( a.Gaps(j) < 0 ) p1 -= a.Gaps(j);
-               if ( a.Gaps(j) != 0 )
-                    errs += gap_open_penalty + gap_extend_penalty * Abs( a.Gaps(j) );
-               for ( int x = 0; x < a.Lengths(j); x++ )
-               {    if ( B[p1] != G[p2] ) errs += mismatch_penalty;
-                    ++p1; ++p2;    }    }
-          #pragma omp critical
-          {    total_errs += errs;
-               total_bases += B.size( );    }    }
-     ostringstream out;
-     out << fixed << setprecision(2) 
-          << ( 1000.0 * total_errs ) / (mismatch_penalty * total_bases) << endl;
-     cout << "// errs per kb = "  << out.str( );
-     cout << "// time used = " << TimeSince(clock)
-          << ", peak mem = " << PeakMemUsageGBString( ) << endl << endl;    }
+          int64_t total_bases = 0, total_errs = 0;
+          #pragma omp parallel for schedule(dynamic, 1000)
+          for ( int d = 0; d < D.E( ); d++ )
+          {    if ( galigns[d].empty( ) ) continue;
+               const refalign& r = galigns[d][0];
+               int chr = r.chr;
+               if ( chr < 0 ) continue;
+               const align& a = r.a;
+               const basevector B = Cat( D.O(d) );
+               const basevector& G = genome[chr-1];
+               int p1 = a.pos1( ), p2 = a.pos2( );
+               int errs = 0;
+               for ( int j = 0; j < a.Nblocks( ); j++ )
+               {    if ( a.Gaps(j) > 0 ) p2 += a.Gaps(j);
+                    if ( a.Gaps(j) < 0 ) p1 -= a.Gaps(j);
+                    if ( a.Gaps(j) != 0 )
+                    {    errs += gap_open_penalty 
+                              + gap_extend_penalty * Abs( a.Gaps(j) );    }
+                    for ( int x = 0; x < a.Lengths(j); x++ )
+                    {    if ( B[p1] != G[p2] ) errs += mismatch_penalty;
+                         ++p1; ++p2;    }    }
+               #pragma omp critical
+               {    total_errs += errs;
+                    total_bases += B.size( );    }    }
+          ostringstream out;
+          out << fixed << setprecision(2) 
+               << ( 1000.0 * total_errs ) / (mismatch_penalty * total_bases) << endl;
+          cout << "// errs per kb = "  << out.str( );    }
+
+     // Done.
+
+     if ( verbosity >= 1 )
+     {    cout << "// time used = " << TimeSince(clock)
+               << ", peak mem = " << PeakMemUsageGBString( ) 
+               << endl << endl;    }    }
+
+template void RefAlignCore(
+     const vec<int>& X,
+     const int HBK,
+     const vecbasevector& tigs,
+     const vec<int>& inv,
+     const digraphE<vec<int>>& D,
+     const vec<int>& dinv,
+     const vec<vec<vec<vec<int>>>>& dlines,
+     const vecbasevector& genome,
+     const MasterVec< SerfVec<triple<int,int,int> > >& alignsb,
+     SerfVec<refalign>& galigns,
+     const int verbosity,
+     String& report,
+     RefAlignScratch<40>& s,
+     const int g_use,
+     const Bool allow_second_best,
+     const Bool optb );
+

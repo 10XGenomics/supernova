@@ -48,6 +48,14 @@ struct GraphRuler<HyperBasevector>
 };
 
 template <>
+struct GraphRuler<digraphE<basevector>>
+{
+     static bool isGap( digraphE<basevector> const& hb, int edge ) {
+          return False;
+     }
+};
+
+template <>
 struct GraphRuler<digraphE<vec<int>>>
 {
      static bool isGap( digraphE< vec<int> > const& super, int edge ) {
@@ -63,11 +71,12 @@ struct GraphRuler<digraphE<int>>
      }
 };
 
+// WARNING: the single option to FindLines is only partially implemented.
 
 template <class DE>
 void FindLines( const DE& dgraph, const vec<int>& dinv,
      vec<vec<vec<vec<int>>>>& lines, const int max_cell_paths, const int max_depth,
-     const Bool verbose )
+     const Bool verbose, const Bool single )
 {    double clock = WallClockTime( );
      vec<int> to_left, to_right;
      dgraph.ToLeft(to_left), dgraph.ToRight(to_right);
@@ -94,7 +103,8 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
                int rv = to_right[ dinv[ dgraph.IFrom(v,0) ] ];
                int rw = to_left[ dinv[ dgraph.ITo(w,0) ] ];
                bounds0.push( rw, rv );    }
-          ParallelUniqueSort(bounds0);
+          if (single) UniqueSort(bounds0);
+          else ParallelUniqueSort(bounds0);
 
           // Find paths across cells.
 
@@ -166,7 +176,8 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
      // Index bounds.
 
      if (verbose) cout << Date( ) << ": indexing bounds" << endl;
-     ParallelSortSync( bounds, xpaths );
+     if (single) SortSync( bounds, xpaths );
+     else ParallelSortSync( bounds, xpaths );
      vec< vec<int> > left_ind( dgraph.N( ) ), right_ind( dgraph.N( ) );
      for ( int i = 0; i < bounds.isize( ); i++ )
      {    left_ind[ bounds[i].first ].push_back(i);
@@ -215,15 +226,9 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
                     line.push_back( xpaths[bid], {{eb}} );
                     if ( eb == e ) cout << "CIRCLE!" << endl;    }    }
 
-          // Generate reverse complement of line.
+          // Save.
 
-          vec< vec< vec<int> > > liner(line);
-          liner.ReverseMe( );
-          for ( int i = 0; i < liner.isize( ); i++ )
-          for ( int j = 0; j < liner[i].isize( ); j++ )
-          {    liner[i][j].ReverseMe( );
-               for ( int k = 0; k < liner[i][j].isize( ); k++ )
-                    liner[i][j][k] = dinv[ liner[i][j][k] ];    }
+          lines.push_back(line);
 
           // Mark.
 
@@ -233,15 +238,21 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
           {    int f = line[i][j][k];
                marked[f] = marked[ dinv[f] ] = True;    }
 
-          // Save.
+          // Generate reverse complement of line and save.
 
-          #pragma omp critical
-          {    lines.push_back( line, liner );    }    }
+          line.ReverseMe( );
+          for ( int i = 0; i < line.isize( ); i++ )
+          for ( int j = 0; j < line[i].isize( ); j++ )
+          {    line[i][j].ReverseMe( );
+               for ( int k = 0; k < line[i][j].isize( ); k++ )
+                    line[i][j][k] = dinv[ line[i][j][k] ];    }
+          lines.push_back(line);    }
 
      // Order paths.
 
      if (verbose) cout << Date( ) << ": ordering paths" << endl;
-     #pragma omp parallel for
+     int nthreads = ( single ? 1 : omp_get_max_threads( ) );
+     #pragma omp parallel for num_threads(nthreads)
      for ( int i = 0; i < lines.isize( ); i++ )
      {    for ( int j = 0; j < lines[i].isize( ); j++ )
                Sort( lines[i][j] );    }
@@ -249,11 +260,12 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
      // Remove lines having identical content.
 
      if (verbose) cout << Date( ) << ": removing identical content" << endl;
-     sortInPlaceParallel(lines.begin(),lines.end());
+     if (single) Sort(lines);
+     else sortInPlaceParallel( lines.begin(), lines.end() );
      Unique(lines);
      size_t nLines = lines.size();
      contents.clear().resize(nLines);
-     #pragma omp parallel for
+     #pragma omp parallel for num_threads(nthreads)
      for ( size_t i = 0; i < nLines; i++ )
      {   vec<vec<vec<int>>> const& vvv = lines[i];
          size_t res = 0;
@@ -312,7 +324,8 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
      // Remove subset lines.
 
      if (verbose) cout << Date( ) << ": removing subsets" << endl;
-     ParallelReverseSortSync( llen, lines );
+     if (single) ReverseSortSync( llen, lines );
+     else ParallelReverseSortSync( llen, lines );
      vec<Bool> to_delete( lines.size( ), False );
      vec< vec<int> > lines_index(nobj);
      for ( int i = 0; i < lines.isize( ); i++ )
@@ -349,23 +362,7 @@ void FindLines( const DE& dgraph, const vec<int>& dinv,
                for ( int j = 1; j < lines_index[e].isize( ); j++ )
                     to_delete[ lines_index[e][j] ] = True;    }    }
      EraseIf( lines, to_delete );
-
-     /*
-     for ( int k = 0; k < lines.isize( ); k++ )
-     {    const vec<vec<vec<int>>>& line = lines[k];
-          cout << "\n";
-          for ( int i = 0; i < line.isize( ); i++ )
-          {    if ( i > 0 ) cout << " ";
-               if ( i % 2 == 0 ) cout << line[i][0][0];
-               else
-               {    cout << "{";
-                    for ( int j = 0; j < line[i].isize( ); j++ )
-                    {    if ( j > 0 ) cout << ",";
-                         cout << "{" << printSeq( line[i][j] ) << "}";    }
-                    cout << "}";    }    }
-          cout << "\n";    }
-     */
-
+     if (verbose) cout << Date( ) << ": found " << lines.size( ) << " lines" << endl;
      LogTime( clock, "used finding lines" );    }
 
 void GetTol( const HyperBasevector& hb,
@@ -878,13 +875,20 @@ void MakeTigs( const vec<vec<vec<int>>>& L, vec<vec<vec<vec<int>>>>& tigs )
 
 template void FindLines<HyperBasevector>( const HyperBasevector& dgraph, 
      const vec<int>& dinv, vec<vec<vec<vec<int>>>>& lines, 
-     const int max_cell_paths, const int max_depth, const Bool verbose );
+     const int max_cell_paths, const int max_depth, const Bool verbose,
+     const Bool single );
+template void FindLines<digraphE<basevector>>( const digraphE<basevector>& dgraph, 
+     const vec<int>& dinv, vec<vec<vec<vec<int>>>>& lines, 
+     const int max_cell_paths, const int max_depth, const Bool verbose,
+     const Bool single );
 template void FindLines<digraphE<vec<int>>>( const digraphE<vec<int>>& dgraph, 
      const vec<int>& dinv, vec<vec<vec<vec<int>>>>& lines, 
-     const int max_cell_paths, const int max_depth, const Bool verbose );
+     const int max_cell_paths, const int max_depth, const Bool verbose,
+     const Bool single );
 template void FindLines<digraphE<int>>( const digraphE<int>& dgraph, 
      const vec<int>& dinv, vec<vec<vec<vec<int>>>>& lines, 
-     const int max_cell_paths, const int max_depth, const Bool verbose );
+     const int max_cell_paths, const int max_depth, const Bool verbose,
+     const Bool single );
 
 void Canonicalize( vec<vec<vec<vec<int>>>>& L )
 {    for ( int j = 0; j < L.isize( ); j++ )

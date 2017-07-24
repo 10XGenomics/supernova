@@ -94,7 +94,7 @@ template< class VB, class VQ> void MarkDups(
 
 void AllTinksCore( const HyperBasevectorX& hb, const vec<int>& inv,     
      const ReadPathVecX& paths, const vec<int64_t>& bci, const VecIntVec & ebcx,
-     vec< triple<int,int,int> >& qept );
+     vec< triple<int,int,int> >& qept, const int verbosity = 1 );
 
 // Compute barcode positions on chain chains.
 

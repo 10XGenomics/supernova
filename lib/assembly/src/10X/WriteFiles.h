@@ -10,13 +10,15 @@
 #include "10X/paths/ReadPathVecX.h"
 
 void WriteAssemblyFiles( const HyperBasevector& hb, const vec<int>& inv,
-     ReadPathVec& paths, VecULongVec& paths_index,
-     const vec<int64_t>& bci, const Bool ALIGN, const vecbasevector& genome,
+     ReadPathVec& paths, const Bool ALIGN, const vecbasevector& genome,
+     const String& dir, MasterVec< SerfVec<triple<int,int,int> > >& alignsb );
+     
+void WriteAssemblyFiles( const HyperBasevector& hb, const vec<int>& inv,
+     ReadPathVecX& paths, const Bool ALIGN, const vecbasevector& genome,
      const String& dir, MasterVec< SerfVec<triple<int,int,int> > >& alignsb );
 
-void WriteAssemblyFiles( const HyperBasevector& hb, const vec<int>& inv,
-     ReadPathVecX& paths, VecULongVec& paths_index,
-     const vec<int64_t>& bci, const Bool ALIGN, const vecbasevector& genome,
+void WriteAssemblyFiles( const HyperBasevectorX& hb, const vec<int>& inv,
+     ReadPathVecX& paths, const Bool ALIGN, const vecbasevector& genome,
      const String& dir, MasterVec< SerfVec<triple<int,int,int> > >& alignsb );
 
 

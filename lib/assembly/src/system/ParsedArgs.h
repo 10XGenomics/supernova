@@ -302,6 +302,7 @@ class parsed_args {
 
   String TheCommand( ) const;
   String GetCommitHash( ) const;
+  String GetRelease( ) const;
   String GetProgramName( ) const { return command_; }
 
   void PrintTheCommandPretty( ostream& out, const String& prefix = "" );

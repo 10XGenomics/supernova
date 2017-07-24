@@ -14,10 +14,12 @@
 char const* ARACHNE_RELEASE = "v3.0";
 char const* OS_RELEASE = STRINGIZER(UNAME_RELEASE);
 char const* LINK_TIMESTAMP = __DATE__ " " __TIME__;
-char const* SVN_REVISION = STRINGIZER(SVN_VERSION);
+char const* SW_COMMIT = STRINGIZER(GIT_COMMIT);
+char const* SW_RELEASE = STRINGIZER(GIT_RELEASE);
 
 char const* ThisCanBeReadUsingTheStringsProgram =
  "OS Release=" STRINGIZER(UNAME_RELEASE) \
  ", Link Timestamp=" __DATE__ " " __TIME__ \
- ", SVN Revision=" STRINGIZER(SVN_VERSION) \
+ ", SW Commit=" STRINGIZER(SW_COMMIT) \
+ ", SW Release=" STRINGIZER(SW_RELEASE) \
  ", GCC Version=" __VERSION__;

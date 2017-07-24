@@ -26,6 +26,7 @@ stage BUCKET_FASTQ_BY_BC(
 
 import subprocess
 import os
+import os.path
 import json
 from tenkit.constants import BARCODE_LOCATION
 
@@ -56,7 +57,10 @@ def main(args, outs):
         martian.throw("must supply a read1 and read2 when reads_interleave == False")
     output_dir = os.path.dirname(os.path.realpath(outs.default))
     if args.barcode_whitelist:
-        barcode_whitelist = BARCODE_LOCATION + "/" + args.barcode_whitelist + ".txt"
+        if os.path.exists(args.barcode_whitelist):
+            barcode_whitelist = args.barcode_whitelist
+        else:
+            barcode_whitelist = BARCODE_LOCATION + "/" + args.barcode_whitelist + ".txt"
     else:
         barcode_whitelist = "none"
     gem_group = chunk["gem_group"] or 1

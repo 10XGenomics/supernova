@@ -24,6 +24,23 @@
 template <class T> inline T const& Min(const T& t1,const T& t2)
 { return (t1<t2)?t1:t2; }
 
+template <class T> inline T const& Min( const T& t1, const T& t2, const T& t3 )
+{    if ( t1 <= t2 && t1 <= t3 ) return t1;
+     if ( t2 <= t3 ) return t2;
+     return t3;    }
+
+template <class T> inline T const& Max( const T& t1, const T& t2, const T& t3 )
+{    if ( t1 >= t2 && t1 >= t3 ) return t1;
+     if ( t2 >= t3 ) return t2;
+     return t3;    }
+
+template <class T> inline T const& Max( 
+     const T& t1, const T& t2, const T& t3, const T& t4 )
+{    if ( t1 >= t2 && t1 >= t3 && t1 >= t3 ) return t1;
+     if ( t2 >= t3 && t2 >= t4 ) return t2;
+     if ( t3 >= t4 ) return t3;
+     return t4;    }
+
 template <class V> inline typename V::value_type const& Min( V const& v )
 { auto beg=v.begin(), end=v.end();
   ForceAssert(beg!=end);

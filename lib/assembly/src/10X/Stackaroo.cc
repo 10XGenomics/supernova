@@ -80,15 +80,19 @@ void GetSupport( const HyperBasevectorX& hb, const HyperBasevectorX& hbl2,
           for ( int e = 0; e < hbl2.E( ); e++ )
                UniqueSort( support[e] );    }    }
 
-void Stackaroo( 
+template <class VP, class VPI>
+void Stackaroo(
 
      // inputs:
 
      VirtualMasterVec<basevector> bases,
      VirtualMasterVec<PQVec> quals, const HyperBasevectorX& hb,
-     const vec<int>& inv, VirtualMasterVec<ReadPath> xpaths,
-     VirtualMasterVec<ULongVec> xpaths_index, 
+     const vec<int>& inv, VP & xpaths0,
+     VPI & xpaths_index0, 
 
+     // MODE = 1 or 2. 1 => MasterVec, 2 => VirtualMasterVec
+     const int MODE,
+     
      // inputs and outputs:
 
      digraphE<vec<int>>& D, vec<int>& dinv, 
@@ -106,6 +110,9 @@ void Stackaroo(
      // Start!
 
      double clock = WallClockTime( );
+
+     if ( MODE != 1 &&  MODE != 2 )
+          FatalErr( "MODE must be 1 for MasterVec and 2 for VirtualMasterVec");
 
      // Parse R and S.
 
@@ -174,9 +181,20 @@ void Stackaroo(
      double mclock = WallClockTime( );
      int ndots = 0, done = 0;
      #pragma omp parallel for num_threads(nthreads) \
-          firstprivate( bases, quals, xpaths, xpaths_index ) schedule(dynamic, 1)
+          firstprivate( bases, quals ) schedule(dynamic, 1)
      for ( int ng = 0; ng < ngaps; ng++ )
      {
+          // Set up dpaths/dpaths_index for MV or VMV
+          
+          VP * pxpaths = NULL;
+          VPI * pxpaths_index= NULL;
+          if ( MODE == 2 ) {
+               pxpaths = new VP( xpaths0 );
+               pxpaths_index = new VPI ( xpaths_index0 );
+          }
+          VP & xpaths = ( MODE == 1 ? xpaths0 : *pxpaths);
+          VPI & xpaths_index = ( MODE == 1 ? xpaths_index0 : *pxpaths_index );
+
           // Find the gap.
 
           int R = -1, S = -1;
@@ -478,6 +496,11 @@ void Stackaroo(
           {
                #pragma omp critical
                {    cout << goutx.str( );    }    }
+
+          if ( MODE == 2 ) {
+               delete pxpaths;
+               delete pxpaths_index;
+          }
           continue;    }
 
      // Show read pair linking between edges.
@@ -679,6 +702,10 @@ void Stackaroo(
           {
                #pragma omp critical
                {    cout << goutx.str( );    }    }
+          if ( MODE == 2 ) {
+               delete pxpaths;
+               delete pxpaths_index;
+          }
           continue;    }
      gout << Date( ) << ": initially there are " 
           << ToStringAddCommas( matches.size( ) ) << " matches" << endl;
@@ -867,6 +894,10 @@ void Stackaroo(
           {
                #pragma omp critical
                {    cout << goutx.str( );    }    }
+          if ( MODE == 2 ) {
+               delete pxpaths;
+               delete pxpaths_index;
+          }
           continue;    }
      vec<basevector> bseq;
      {
@@ -1196,6 +1227,10 @@ void Stackaroo(
           {
                #pragma omp critical
                {    cout << goutx.str( );    }    }
+          if ( MODE == 2 ) {
+               delete pxpaths;
+               delete pxpaths_index;
+          }
           continue;    }
      int v = right2[b1], w = left2[b2];
      vec<int> bx;
@@ -1534,7 +1569,11 @@ void Stackaroo(
           #pragma omp critical
           {    cout << goutx.str( );    }    }
 
-          }    }
+          }
+     if ( MODE == 2 ) {
+          delete pxpaths;
+          delete pxpaths_index;
+     }    }
 
      // Prep and insert the gap closures.
 
@@ -1718,3 +1757,55 @@ void Stackaroo(
                << MAX_CLOSURES << " closures)" << endl;
           cout << Date( ) << ": total usable closures = " << nclosures
                << endl;    }    }
+               
+template
+void Stackaroo( 
+
+     // inputs:
+
+     VirtualMasterVec<basevector> bases,
+     VirtualMasterVec<PQVec> quals, const HyperBasevectorX& hb,
+     const vec<int>& inv, VirtualMasterVec<ReadPath> & xpaths,
+     VirtualMasterVec<ULongVec> & xpaths_index, 
+     const int MODE,
+
+     // inputs and outputs:
+
+     digraphE<vec<int>>& D, vec<int>& dinv, 
+
+     // control over gap set:
+
+     const String& S, String& R, const Bool ALL,
+
+     // logging:
+
+     const Bool VERBOSE, const int VERBOSITY, const HyperBasevectorX& ddn,
+     const Bool VISUAL_ABBR, const Bool DIRECT, const Bool SHOW_MERGED_STACKS
+     );
+
+template
+void Stackaroo( 
+
+     // inputs:
+
+     VirtualMasterVec<basevector> bases,
+     VirtualMasterVec<PQVec> quals, const HyperBasevectorX& hb,
+     const vec<int>& inv, MasterVec<ReadPath> & xpaths,
+     MasterVec<ULongVec> & xpaths_index, 
+     const int MODE,
+
+     // inputs and outputs:
+
+     digraphE<vec<int>>& D, vec<int>& dinv, 
+
+     // control over gap set:
+
+     const String& S, String& R, const Bool ALL,
+
+     // logging:
+
+     const Bool VERBOSE, const int VERBOSITY, const HyperBasevectorX& ddn,
+     const Bool VISUAL_ABBR, const Bool DIRECT, const Bool SHOW_MERGED_STACKS
+     );
+
+

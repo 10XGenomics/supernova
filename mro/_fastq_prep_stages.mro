@@ -1,0 +1,25 @@
+#
+# Copyright (c) 2015 10X Genomics, Inc. All rights reserved.
+#
+filetype fastq;
+filetype bam;
+filetype bam.bai;
+filetype bed;
+filetype json;
+filetype fastq.gz;
+filetype txt;
+
+stage SETUP_CHUNKS(
+    in  string   sample_id,
+    in  map[]    sample_def         "list of dictionary specifying input data",
+    in  string   input_mode         "configuration of the input fastqs",
+    in  string   barcode_whitelist,
+    in  map      downsample,
+    out map[]    chunks             "map has barcode, barcode_reverse_complement, sample_index, read1, read2, gem_group, and read group fields",
+    out string[] read_groups        "list of strings representing read groups",
+    out json     downsample_info,
+    out txt      barcode_whitelist_path,
+    out int      requested_read_pairs,
+    src py       "stages/reads/setup_chunks",
+)
+

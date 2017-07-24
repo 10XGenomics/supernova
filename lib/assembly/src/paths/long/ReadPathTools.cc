@@ -109,6 +109,101 @@ bool ValidateReadPath(const HyperBasevector& hbv, const vec<int>& to_left,
     return true;
 }
 
+
+
+
+
+
+
+
+
+bool ValidateReadPath(const HyperBasevectorX& hb,
+		      const int offset, const vec<int>& edge_list, String& message, 
+		      const int read_length = 0) {
+
+    int edge_count = hb.E();
+    uint K = hb.K();
+
+    // Check edge ids are in bounds
+    for (auto edge_id : edge_list)
+	if (edge_id >= edge_count) {
+	    message = "ERROR - Invalid edge ID: " + ToString(edge_id);
+	    return false;
+	}
+    
+    // Validate path through graph
+    for (uint i = 0 ; i < edge_list.size(); i++) {
+	int edge = edge_list[i];
+	int right_v = hb.ToRight(edge);
+	if ((i < edge_list.size() - 1) && (hb.ToLeft(edge_list[i+1]) != right_v)) {
+	    message = "ERROR - no connection between edges : " + ToString(edge) 
+		+ " and " + ToString(edge_list[i+1]);
+	    return false;
+	}
+    }
+    
+    // Validate negative offset
+    if (read_length != 0 && offset < 0 && -offset >= static_cast<int>(read_length)) {
+	message = "ERROR - negative offset exceeds read length of: " 
+	    + ToString(offset);
+	return false;
+    }
+    
+    // Validate positive offset
+    int first_edge_length = hb.Bases(edge_list[0]);
+    if (offset < 0 && offset >= first_edge_length) {
+	message = "ERROR - postive offset exceeds first edge length of: " 
+	    + ToString(first_edge_length);
+	return false;
+    }
+
+    // Check path through graph (only possible if we know the read length)
+    if (read_length != 0) {
+	int used_bases =  (offset < 0 ? -offset : 0);
+	int edge_start_pos = (offset < 0 ? 0 : offset);
+	
+	for (size_t i = 0 ; i < edge_list.size(); i++) {
+
+	    int remaining_bases = read_length - used_bases;
+	    if ( remaining_bases == 0 ) {
+		message = "ERROR - path extends beyond read onto edge: " 
+		    + ToString(edge_list[i]);
+		return false;
+	    }
+
+	    int edge_size = hb.Bases(edge_list[i]);
+	    int trimmed_edge_size = edge_size - ( i == edge_list.size() - 1 ? 0 : (K - 1)); 
+	    int edge_end_pos = Min(edge_start_pos + remaining_bases, trimmed_edge_size); 
+	    
+	    if (edge_start_pos >= edge_end_pos) 
+		edge_end_pos = edge_start_pos;
+
+	    used_bases += (edge_end_pos - edge_start_pos);
+	    
+	    if (edge_start_pos == edge_end_pos)
+		edge_start_pos = ( K - 1) - (edge_size - edge_start_pos);
+	    else 
+		edge_start_pos = 0;
+	}
+    }
+
+    // Add test for ambigious overlap?
+
+    message = "";
+    return true;
+}
+
+
+
+
+
+
+
+
+
+
+
+
 bool ValidateAllReadPaths(const HyperBasevector& hbv, const HyperBasevectorX& hb,
         const ReadPathVecX& readpaths ) {
     // Compute left and right indices
@@ -142,6 +237,8 @@ bool ValidateAllReadPaths(const HyperBasevector& hbv, const HyperBasevectorX& hb
         cout<<"..."<<endl;
     return !found_invalid;
 }
+
+
 
 bool ValidateAllReadPaths(const HyperBasevector& hbv, const ReadPathVecX& readpaths ) {
     // Compute left and right indices
@@ -177,6 +274,51 @@ bool ValidateAllReadPaths(const HyperBasevector& hbv, const ReadPathVecX& readpa
         cout<<"..."<<endl;
     return !found_invalid;
 }
+
+
+
+
+
+
+
+bool ValidateAllReadPaths(
+     const HyperBasevectorX& hb, const ReadPathVecX& readpaths ) {
+
+    String message;
+    bool found_invalid = false;
+    const int max_prints = 10;
+    int count = 0;
+    #pragma omp parallel for schedule(dynamic,1000)
+    for (size_t i = 0; i < (size_t) readpaths.size();  ++i) {
+        if(count<=max_prints){
+            ReadPath path; readpaths.unzip(path,hb,i);
+            if (!path.empty() 
+
+
+                && ValidateReadPath(hb, path.getOffset(), 
+                        vec<int>(path.begin(), path.end()), message ) == false) {
+
+
+                found_invalid = true;
+                #pragma omp critical
+                { count++;
+                  if(count==1) cout<<"Unordered output of contentious paths..."<<endl;
+                  cout << "Path " << i << " of " << readpaths.size( ) << " = " 
+                         << path.getOffset() << ":" 
+                  << printSeq( path ) << "  " << message <<endl;
+                }
+            }
+        }
+    }
+    if(count>max_prints)
+        cout<<"..."<<endl;
+    return !found_invalid;
+}
+
+
+
+
+
 
 bool ValidateAllReadPaths(const HyperBasevector& hbv, const ReadPathVec& readpaths ) {
     // Compute left and right indices

@@ -14,11 +14,35 @@
 
 void DefinePairSet( const HyperBasevectorX& hb, const vec<int>& inv, 
      ReadPathVecX& paths, const vec<Bool>& dup, const vec<Bool>& bad,
-     vec<int64_t>& ppids)
+     vec<int64_t>& ppids, const Bool verbose )
 {
      const int64_t batch = 10000;
      const int64_t num_pairs = paths.size()/2;
      vec< pair <vec<int>, vec<int> > > proc;
+
+     // Reserve space.
+
+     if (verbose) cout << Date( ) << ": reserving space" << endl;
+     int64_t count = 0;
+     #pragma omp parallel for schedule( dynamic, 1 )
+     for ( int64_t bi = 0; bi < num_pairs; bi += batch )
+     {    int64_t counti = 0;
+          const int64_t pid_max = Min( bi + batch, num_pairs );
+          for ( int64_t pid = bi; pid < pid_max; pid++ )
+          {    if ( dup[pid] || bad[pid] ) continue;
+               int64_t id1 = 2*pid, id2 = 2*pid+1;
+               ReadPath p1, p2; paths.unzip(p1,hb,id1); paths.unzip(p2,hb,id2);
+               if ( p1.size( ) == 0 || p2.size( ) == 0 ) continue;
+               int v = hb.ToRight( p1.back( ) ), w = hb.ToLeft( inv[ p2.back( ) ] );
+               if ( hb.From(v).size( ) == 0 || hb.To(w).size( ) == 0 ) continue;
+               counti++;    }
+          #pragma omp critical
+          {    count += counti;    }    }
+     proc.reserve(2*count), ppids.reserve(count);
+
+     // Now do the computation.
+
+     if (verbose) cout << Date( ) << ": finding pairs" << endl;
      #pragma omp parallel for schedule( dynamic, 1 )
      for ( int64_t bi = 0; bi < num_pairs; bi += batch )
      {    vec< pair <vec<int>, vec<int> > > proci;
@@ -26,8 +50,7 @@ void DefinePairSet( const HyperBasevectorX& hb, const vec<int>& inv,
           vec<int> x1, x2;
           const int64_t pid_max = Min( bi + batch, num_pairs );
           for ( int64_t pid = bi; pid < pid_max; pid++ )
-          {    
-               if ( dup[pid] || bad[pid] ) continue;
+          {    if ( dup[pid] || bad[pid] ) continue;
                int64_t id1 = 2*pid, id2 = 2*pid+1;
                ReadPath p1, p2; paths.unzip(p1,hb,id1); paths.unzip(p2,hb,id2);
                if ( p1.size( ) == 0 || p2.size( ) == 0 ) continue;
@@ -42,8 +65,13 @@ void DefinePairSet( const HyperBasevectorX& hb, const vec<int>& inv,
                ppidsi.push_back(pid);    }
           #pragma omp critical
           {    proc.append(proci); ppids.append(ppidsi);    }    }
-     // cout << Date( ) << ": sorting proc" << endl;
-     ParallelUniqueSortSync( proc, ppids );    }
+     if (verbose) 
+     {    cout << Date( ) << ": sorting proc, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;    }
+     ParallelUniqueSortSync( proc, ppids );
+     if (verbose) 
+     {    cout << Date( ) << ": sort complete, mem = " << MemUsageGBString( )
+               << ", peak = " << PeakMemUsageGBString( ) << endl;    }    }
 
 template<class VPI > void ClosePair( const vec<int>& x1, 
      const vec<int>& x2, const int64_t pid, const HyperBasevectorX& hb, 
@@ -373,15 +401,17 @@ template<class VPI > void Closer( const HyperBasevectorX& hb,
      // Define pair set.  Note that when we do all reads, we should 
      // canonicalize orientation, and push back both orientations at the end.
 
-     if ( verbosity >= 1 ) cout << Date( ) << ": define pair set" << endl;
+     if ( verbosity >= 1 ) 
+     {    cout << Date( ) << ": define pair set, mem = " 
+               << MemUsageGBString( ) << endl;    }
      vec<int64_t> ppids;
-     DefinePairSet( hb, inv, paths, dup, bad, ppids );
+     DefinePairSet( hb, inv, paths, dup, bad, ppids, verbosity >= 1 );
 
      // Start main loop.
 
      if ( verbosity >= 1 )
-     {    cout << Date( ) << ": start main loop, peak mem = "
-               << PeakMemUsageGBString( ) << endl;
+     {    cout << Date( ) << ": start main loop, mem = " << MemUsageGBString( )
+               << ", peakmem = " << PeakMemUsageGBString( ) << endl;
           cout << Date( ) << ": running 200 batches" << endl;    }
      double mclock = WallClockTime( );
      if ( !GLOBAL ) omp_set_num_threads(1);
@@ -436,7 +466,8 @@ template<class VPI > void Closer( const HyperBasevectorX& hb,
                     flush(cout);    }    }    }
      if ( verbosity >= 1 )
      {    cout << Date( ) << ": main loop done, " << TimeSince(mclock)
-               << " used, peak mem = " << PeakMemUsageGBString( ) << endl;    }    }
+               << " used, mem = " << MemUsageGBString( ) << ", peakmem = " 
+               << PeakMemUsageGBString( ) << endl;    }    }
 
 template void Closer( const HyperBasevectorX& hb, 
      const vec<int>& inv, ReadPathVecX& paths, 

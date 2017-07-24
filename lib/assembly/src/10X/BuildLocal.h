@@ -23,20 +23,28 @@ template<class VE> void GetBarcodes(
 {
      int total = 0, sc = s1;
      while(1)
-     {    if ( D.O(sc)[0] < 0 ) break;
+     {    
+          // avoid weird case
+          if ( D.O(sc)[0] < 0 ) break;
+          // 
           total += lens[sc];
+          // for each hb-edge in sc
           for ( int j = 0; j < D.O(sc).isize( ); j++ )
           {    int e = D.O(sc)[j];
+               // skip if not unique occurence 
                if ( mult[e] != 1 ) continue;
+               // skip if not enough kmers
                if ( hb.Kmers(e) < MIN_KMERS ) continue;
+               // skip if not enough barcodes
                if ( (int) ebcx[e].size( ) > MAX_BARCODES ) continue;
+               // store barcodes on sc
                for ( int l = 0; l < (int) ebcx[e].size( ); l++ )
                     b.push_back( ebcx[e][l] );    }
+          // if enuf bc, go home
           if ( total >= GRAB ) break;
           int w = to_left[sc];
 
           // Skip over gaps.
-          
           if ( D.To(w).solo( ) && D.From(w).solo( ) && D.OTo( w, 0 )[0] < 0 )
           {    int x = D.To(w)[0];
                if ( D.From(x).solo( ) && D.To(x).solo( ) )

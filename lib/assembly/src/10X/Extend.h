@@ -11,7 +11,7 @@
 #include "10X/paths/ReadPathVecX.h"
 
 template <class VQ>
-void ExtendPathsNew( const HyperBasevector& hb, const vec<int>& inv,
+void ExtendPathsNew( const HyperBasevectorX& hb, const vec<int>& inv,
      const vecbasevector& bases, const VQ& qualsx, ReadPathVecX& paths,
      const Bool BACK_EXTEND );
 #endif

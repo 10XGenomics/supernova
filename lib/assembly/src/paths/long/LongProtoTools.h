@@ -29,7 +29,6 @@
 #include "paths/long/Logging.h"
 #include "paths/long/LongProtoTools.h"
 #include "paths/long/PairInfo.h"
-#include "paths/long/ultra/ConsensusScoreModel.h"
 #include "system/ParsedArgs.h"
 #include "system/System.h"
 
@@ -267,12 +266,6 @@ private:
     mutable dictionary_t dict_;
     const String tmp_dir_;
 };
-
-template<int K> void BuildCorrectedReads( const vecbasevector& reads,
-     const IAndOsVec& F, const vec<int>& rid,
-     VecEFasta& corrected, vec<int>& cid, const ConsensusScoreModel& error_model,
-     const long_heuristics& heur, const long_logging_control& log_control,
-     const long_logging& logc, const ref_data& ref, const int NUM_THREADS );
 
 void ReportPeakMem( const String msg = "" );
 

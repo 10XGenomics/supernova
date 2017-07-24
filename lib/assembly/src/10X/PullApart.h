@@ -11,6 +11,6 @@
 void PullApartInversions( digraphE<vec<int>>& D, vec<int>& dinv );
 
 void PullApart( const vec<int>& inv, digraphE<vec<int>>& D, vec<int>& dinv, 
-     const ReadPathVec& dpaths, vec<int>& dels, Bool verbose );
+     const ReadPathVec& dpaths, vec<int>& dels, Bool verbose, const int mode = 1 );
 
 #endif

@@ -71,7 +71,8 @@ void PullApartInversions( digraphE<vec<int>>& D, vec<int>& dinv )
      cout << Date( ) << ": pulled apart " << count << " inversions" << endl;    }
 
 Bool SupportSplit( const int d1, const int d2, const int f1, const int f2,
-     const vec<int>& dinv, const ReadPathVec& dpaths, const IntIndex& dpaths_index )
+     const vec<int>& dinv, const ReadPathVec& dpaths, const IntIndex& dpaths_index,
+     const int mode )
 {
      int sup11 = 0, sup22 = 0, sup12 = 0, sup21 = 0;
      vec<vec<int>> X;
@@ -119,13 +120,25 @@ Bool SupportSplit( const int d1, const int d2, const int f1, const int f2,
                {    if ( x[j] == f2 )
                     {    sup22++;
                          break;    }    }    }    }
-     if ( sup11 < 5 || sup22 < 5 ) return False;
-     if ( sup11 + sup22 < 5 * ( sup12 + sup21 ) ) return False;
-     if ( sup12 + sup21 > 4 ) return False;
-     return True;    }
+     if ( mode == 1 )
+     {    if ( sup11 < 5 || sup22 < 5 ) return False;
+          if ( sup11 + sup22 < 5 * ( sup12 + sup21 ) ) return False;
+          if ( sup12 + sup21 > 4 ) return False;
+          return True;    }
+     else // mode = 2
+     {    if ( dinv[f1] == f2 )
+          {    if ( sup11 < 5 || sup22 < 5 ) return False;
+               if ( sup11 + sup22 < 5 * ( sup12 + sup21 ) ) return False;
+               return True;    }
+          else
+          {    if ( sup11 >= 5 && sup22 >= 5 && sup12 + sup21 == 0 ) return True;
+               if ( sup11 >= 10 && sup22 >= 10 && sup12 + sup21 <= 1 ) return True;
+               return False;    }    }    }
 
 void PullApart( const vec<int>& inv, digraphE<vec<int>>& D, vec<int>& dinv, 
-     const ReadPathVec& dpaths, vec<int>& dels, Bool verbose )
+     const ReadPathVec& dpaths, vec<int>& dels, Bool verbose, 
+     const int mode // 1 or 2
+     )
 {    // Seems a little dubious that we're not recomputing dpaths.
      IntIndex dpaths_index( dpaths, D.E( ), verbose ); // THIS IS A DUPLICATION!!!!!
      vec<int> to_left, to_right;
@@ -138,14 +151,18 @@ void PullApart( const vec<int>& inv, digraphE<vec<int>>& D, vec<int>& dinv,
           int w = D.From(v)[0];
           if ( D.To(w).size( ) != 1 || D.From(w).size( ) != 2 ) continue;
           int d1 = D.ITo(v,0), d2 = D.ITo(v,1), e = D.IFrom(v,0);
+          if ( mode == 2 ) // really should always be executed
+          {    if ( D.O(d1)[0] < 0 || D.O(d2)[0] < 0 ) continue;    }
           for ( int p = 0; p < 2; p++ )
           {    int j1 = p, j2 = 1 - p;
                int f1 = D.IFrom(w,j1), f2 = D.IFrom(w,j2);
+               if ( mode == 2 ) // really should always be executed
+               {    if ( D.O(f1)[0] < 0 || D.O(f2)[0] < 0 ) continue;    }
                int re = dinv[e];
                if ( !IsUnique( vec<int> { to_left[e], to_right[e],
                     to_left[re], to_right[re] } ) )
                {    continue;    }
-               if ( !SupportSplit( d1, d2, f1, f2, dinv, dpaths, dpaths_index ) )
+               if ( !SupportSplit(d1, d2, f1, f2, dinv, dpaths, dpaths_index, mode) )
                     continue;
                #pragma omp critical
                {    pulls.push( vec<int>( { d1, d2, e, f1, f2 } ) );    }    
@@ -155,13 +172,17 @@ void PullApart( const vec<int>& inv, digraphE<vec<int>>& D, vec<int>& dinv,
      for ( int v = 0; v < D.N( ); v++ )
      {    if ( D.To(v).size( ) != 2 || D.From(v).size( ) != 2 ) continue;
           int d1 = D.ITo(v,0), d2 = D.ITo(v,1);
+          if ( mode == 2 ) // really should always be executed
+          {    if ( D.O(d1)[0] < 0 || D.O(d2)[0] < 0 ) continue;    }
           for ( int p = 0; p < 2; p++ )
           {    int j1 = p, j2 = 1 - p;
                int f1 = D.IFrom(v,j1), f2 = D.IFrom(v,j2);
+               if ( mode == 2 ) // really should always be executed
+               {    if ( D.O(f1)[0] < 0 || D.O(f2)[0] < 0 ) continue;    }
                int rd1 = dinv[d1], rd2 = dinv[d2], rf1 = dinv[f1], rf2 = dinv[f2];
                int rv = to_left[rd1];
                if ( v == rv ) continue;
-               if ( !SupportSplit( d1, d2, f1, f2, dinv, dpaths, dpaths_index ) )
+               if ( !SupportSplit(d1, d2, f1, f2, dinv, dpaths, dpaths_index, mode) )
                     continue;
                #pragma omp critical
                {    pulls2.push( vec<int>( { d1, d2, f1, f2 } ) );    }    

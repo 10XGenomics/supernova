@@ -172,6 +172,10 @@ class digraph
      void GetPredecessors1( const int v, vec<int>& to_v ) const;
      void GetSuccessors1( const int v, vec<int>& from_v ) const;
 
+     // Determine if there is a path from v to w.
+
+     Bool HavePath( const int v, const int w ) const;
+
      // Return the connected component containing a given vertex.  Returns a sorted
      // list of vertices.
 
@@ -223,7 +227,7 @@ class digraph
      // CyclicCore: return a subset of vertices that define a subgraph having no 
      // sources and sinks, and which is empty iff the graph is acyclic.  This 
      // should be faster than Acyclic.  The cyclic core should be the union of all
-     // vertices that appear in cycles.
+     // vertices that appear in cycles.  Output is unique sorted.
 
      void CyclicCore( vec<int>& core ) const;
 
@@ -303,6 +307,11 @@ class digraph
 
      void FindSimpleLines2( vec<vec<int>>& lines ) const;
 
+     // Determine if the graph is a simple line.  Circles are not allowed.
+     // A single vertex with no edges counts as a simple line.
+
+     Bool IsSimpleLine( ) const;
+
      // ============================================================================
      // ======================= PRINTERS AND WRITERS ===============================
      // ============================================================================
@@ -321,8 +330,11 @@ class digraph
           const vec<String>& vertex_colors ) const;
      void DOT( ostream& out, const vec< vec<String> >& edge_labels,
           const vec<String>& vertex_colors, 
-          const vec<vec<String>>& edge_colors, const vec<vec<String>>& edge_attrs,
-          const vec<vec<String>>& legends, const vec<String>& legend_colors ) const;
+          const vec<vec<String>>& edge_colors, 
+          const vec<vec<String>>& edge_attrs,
+          const vec<vec<String>>& edge_attrs2,
+          const vec<vec<String>>& legends, const vec<String>& legend_colors,
+          const String& layout = "" ) const;
      void PrettyDOT( ostream& out, Bool label_contigs = True, 
 		     Bool label_vertices = False,
 		     const vec<int>* componentsToPrint = NULL, 
@@ -455,6 +467,8 @@ template<class V> class digraphV : public digraph {
 
      const V& Vert( int v ) const;
      V& VertMutable( int v );
+     const vec<V>& Verts( ) const { return verts_; }
+     vec<V>& VertsMutable( ) { return verts_; }
 
      int AddVertex( const V& v );
 
@@ -642,6 +656,10 @@ template<class F> class digraphE : public digraph {
 
      digraphE( const ConstructorName cname /* FROM_EDGE_EQUIV */, const digraphE& g, 
           const equiv_rel& e );
+
+     // Constructor 8c: from a given digraph and set of orbits/partitions on its
+     // edges. This essentially does the same thing as 8b, but parallelized now.
+     digraphE( const digraphE& g, const vec<vec<int>>& orbits);
 
      // Constructor 9: form the disjoint union of a collection of digraphs.
 
@@ -900,10 +918,23 @@ template<class F> class digraphE : public digraph {
           vec<int>& to_left, vec<int>& to_right );
      void SplayVertexWithUpdate( 
           const int v, vec<int>& to_left, vec<int>& to_right );
+     void GiveEdgeNewFromVxWithUpdate( int edge_id, int old_from_v, int new_from_v,
+          vec<int>& to_left )
+     {    GiveEdgeNewFromVx( edge_id, old_from_v, new_from_v );
+          to_left[edge_id] = new_from_v;    }
+     void GiveEdgeNewToVxWithUpdate( int edge_id, int old_to_w, int new_to_w,
+          vec<int>& to_right )
+     {    GiveEdgeNewToVx( edge_id, old_to_w, new_to_w );
+          to_right[edge_id] = new_to_w;    }
 
      // ============================================================================
      // ======================== END ABOVE SECTION =================================
      // ============================================================================
+
+     // CyclicCoreEdges: same as CyclicCore but return the set of edges in the 
+     // cyclic core.  Output is unique sorted.
+
+     void CyclicCoreEdges( vec<int>& x ) const;
 
      // InitialEdges: return sorted list of indices of all edges that start from a 
      // source.  TerminalEdges: return sorted list of indices of all edges that 
@@ -993,11 +1024,11 @@ template<class F> class digraphE : public digraph {
 
      void LiberateEdge( const int e, const int v, const int w );
 
-     // ComponentsE: find the connected components.  Each component is a list 
-     // of edges.  And a version that appears to be stupdendously faster.
+     // ComponentsE: find the connected components.  Each component is an *unsorted*
+     // list of edges.  And a version that appears to be stupdendously faster.
      
      void ComponentsE( vec< vec<int> >& comp ) const;
-     void ComponentsEFast( vec< vec<int> >& comp ) const; // comp[i] NOT sorted
+     void ComponentsEFast( vec< vec<int> >& comp ) const;
 
      // ThisClose: determine if there is a path from v to w whose sum of edge
      // objects is <= d.  This assumes that edge objects can be added and that
@@ -1039,6 +1070,18 @@ template<class F> class digraphE : public digraph {
      // Change order of vertices.
 
      void ReorderVertices( const vec<int>& new_order );
+
+     // Change order of vertices in parallel.
+
+     void ParallelReorderVertices( const vec<int>& new_order );
+
+     // Canonicalize the order of vertices based on edges
+
+     void CanonicalizeVertices( ); 
+
+     // Reorder the edges by supplying a permutation from src idx -> dest idx
+
+     void ReorderEdges( vec<int64_t>& permutation );
 
      // Change order of components.
 
@@ -1101,14 +1144,16 @@ template<class F> class digraphE : public digraph {
      // and L2, as lists of edges.  This is only implemented for the case where 
      // F = int.  If max_paths is specified and more than that many paths are found,
      // return False.  If max_loops is specified and the code loops more than that 
-     // number of times, return False.
+     // number of times, return False.  If max_copies set, ignore paths containing
+     // multiple instances of an edge exceeding that number.
 
      Bool AllPathsLengthRange( int v, int w, int L1, int L2, 
-          const vec<int>& to_right, vec< vec<int> >& paths, 
-          int max_paths = 0, int max_loops = 0, const Bool no_dups = False ) const;
+          const vec<int>& to_left, const vec<int>& to_right, vec< vec<int> >& paths, 
+          int max_paths = 0, int max_loops = 0, const Bool no_dups = False,
+          const int max_copies = 0 ) const;
 
-     // AllPathsLengthRangeAlt: same as AllPathsLengthRange, but processes as FIFO
-     // instead of LIFO.
+     // AllPathsLengthRangeAlt: similar to AllPathsLengthRange, but processes as 
+     // FIFO instead of LIFO.  The handling of max_loops is also differnt.
 
      Bool AllPathsLengthRangeAlt( int v, int w, int L1, int L2, 
           const vec<int>& to_right, vec< vec<int> >& paths, 

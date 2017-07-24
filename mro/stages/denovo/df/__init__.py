@@ -1,6 +1,8 @@
+import os
+import glob
 import shutil
 import subprocess
-import tenkit.supernova as tk_sn
+import tenkit.supernova.alerts as alerts
 import martian
 
 def split(args):
@@ -44,6 +46,20 @@ def log_dmesg( ):
         martian.log_info( "Unable to run dmesg." )
         martian.log_info( str(e) )
 
+def log_ps( ):
+    MAX_LINES = 6
+    ps_cmd = ["ps", "--sort=-rss", "-eo", "pid,pmem,rss,comm,uid"]
+    ps_log = "Running command " + " ".join(ps_cmd) + "\n"
+    try:
+        ps_out = subprocess.check_output( ps_cmd )
+        for i, line in enumerate( ps_out.split("\n") ):
+            if i == MAX_LINES:
+                break
+            ps_log += "%8s %5s %12s %5.5s %s\n" % tuple(line.split())
+    except:
+        ps_log += "Running ps command failed\n"
+    martian.log_info( ps_log )
+
 def process_return_code( returncode ):    
     msg = None
     if returncode < 0:
@@ -56,6 +72,10 @@ def process_return_code( returncode ):
         "(code: %d). This may have been sent by you, your IT admin, "\
         "or automatically by the system itself "\
         "(e.g. the out-of-memory killer)." % (sig_name,-returncode) 
+    elif returncode == 99:
+        msg = "Supernova terminated because of insufficient memory. "\
+        "The stage _stdout file may contain additional useful information, "\
+        "e.g., whether any competing processes were running."
     return msg
 
 def main(args, outs):
@@ -98,9 +118,13 @@ def main(args, outs):
         else:
             martian.log_warn("unknown downsample mode was ignored")
 
+    select_frac=1.0
 
     df_command = ['DF', 'LR_SELECT_FRAC={:.8f}'.format(select_frac), 'LR='+args.reads,
             'OUT_DIR='+outs.default, "MAX_MEM_GB="+str(args.__mem_gb), "NUM_THREADS="+str(args.__threads) ]
+
+    if args.mspedges is not None:
+        df_command.append( "MSPEDGES={}".format(args.mspedges) )
 
     if args.pipeline_id is not None:
         df_command.append( "PIPELINE={}".format(args.pipeline_id) )
@@ -117,9 +141,9 @@ def main(args, outs):
     print " ".join(df_command)
     
     ## write alerts to txt file
-    tk_sn.write_stage_alerts("df", path=outs.default)
+    alerts.write_stage_alerts("df", path=outs.default)
 
-    alarm_bell = tk_sn.SupernovaAlarms(base_dir=outs.default)
+    alarm_bell = alerts.SupernovaAlarms(base_dir=outs.default)
     try:
         subprocess.check_call(df_command)
     except subprocess.CalledProcessError as e:
@@ -134,6 +158,9 @@ def main(args, outs):
         ## log dmesg
         log_dmesg( )
         
+        ## log ps output
+        log_ps( )
+
         ## detect return code
         exit_msg = process_return_code( e.returncode )
         alarm_bell.exit(exit_msg)
@@ -142,3 +169,5 @@ def main(args, outs):
     ## post any warnings from this stage here
     alarm_bell.post()
 
+    for f in glob.glob("*.mm"):
+        shutil.move(f, os.path.join(outs.default,"stats") )

@@ -61,4 +61,26 @@ template<int K> void MakeKmerLookup0x( const vecbasevector& unibases,
      cout << Date( ) << ": sorting kmers" << endl;
      sortInPlaceParallel( kmers_plus.begin( ), kmers_plus.end( ) );    }
 
+template<int K> void MakeKmerLookup4( const vecbasevector& unibases,
+     vec< triple<kmer<K>,int,int> >& kmers_plus )
+{    vec<int64_t> starts;
+     starts.push_back(0);
+     for ( size_t i = 0; i < unibases.size( ); i++ )
+     {    const basevector& u = unibases[i];
+          starts.push_back( starts.back( ) + Max( 0, u.isize( ) - K + 1 ) );    }
+     kmers_plus.resize( starts.back( ) );
+     kmer<K> x, xrc;
+     for ( size_t i = 0; i < unibases.size( ); i++ )
+     {    const basevector& u = unibases[i];
+          for ( int j = 0; j <= u.isize( ) - K; j++ )
+          {    int64_t r = starts[i] + j;
+               x.SetToSubOf( u, j );
+               xrc = x;
+               xrc.ReverseComplement( );
+               Bool fw = ( x < xrc );
+               kmers_plus[r].first = ( fw ? x : xrc );
+               kmers_plus[r].second = i;
+               kmers_plus[r].third = ( fw ? j : -j-1 );    }    }
+     Sort(kmers_plus);    }
+
 #endif

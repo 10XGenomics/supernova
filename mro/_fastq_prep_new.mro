@@ -1,0 +1,52 @@
+#
+# Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
+#
+@include "_fastq_sort_stages.mro"
+@include "_fastq_prep_stages.mro"
+
+pipeline _FASTQ_PREP_NEW(
+    in  string  fastq_mode                   "configuration of the input fastqs",
+    in  map[]   sample_def,
+    in  int     trim_length,
+    in  string  sample_id,
+    in  map     downsample,
+    in  string  barcode_whitelist,
+    out fastq.gz[] reads,
+    out string[] read_groups,
+    out json     lot_info,
+    out json     downsample_info,
+    out txt      barcode_whitelist_path,
+)
+{
+    call local volatile SETUP_CHUNKS(
+        sample_id         = self.sample_id,
+        downsample        = self.downsample,
+        input_mode        = self.fastq_mode,
+        sample_def        = self.sample_def,
+        barcode_whitelist = self.barcode_whitelist,
+    )
+
+    call volatile BUCKET_FASTQS(
+        trim_length = self.trim_length,
+        chunks = SETUP_CHUNKS.chunks,
+        barcode_whitelist_path = SETUP_CHUNKS.barcode_whitelist_path,
+        max_expected_barcode_errors = 1.0,
+        bc_confidence_threshold = 0.975,
+        requested_read_pairs = SETUP_CHUNKS.requested_read_pairs,
+    )
+
+    call volatile SORT_FASTQS(
+        barcode_whitelist_path = SETUP_CHUNKS.barcode_whitelist_path,
+        read_buckets = BUCKET_FASTQS.read_buckets,
+        subsample_rate = BUCKET_FASTQS.final_subsample_rate,
+    )
+
+    return (
+        reads = SORT_FASTQS.reads,
+        read_groups = SETUP_CHUNKS.read_groups,
+        lot_info = null,  #FIXME
+        downsample_info = SETUP_CHUNKS.downsample_info,
+        barcode_whitelist_path = SETUP_CHUNKS.barcode_whitelist_path,
+    )
+}
+

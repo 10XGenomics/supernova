@@ -202,6 +202,9 @@ template void MakeKmerLookup0( const vecbasevector& tigs,
      vec< triple< kmer<32>,int,int> >& kmers_plus );
 
 template void MakeKmerLookup0( const vecbasevector& tigs,
+     vec< triple< kmer<36>,int,int> >& kmers_plus );
+
+template void MakeKmerLookup0( const vecbasevector& tigs,
      vec< triple< kmer<40>,int,int> >& kmers_plus );
 
 template void MakeKmerLookup0( const vecbasevector& tigs,

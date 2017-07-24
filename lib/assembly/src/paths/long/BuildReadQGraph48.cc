@@ -54,8 +54,10 @@ namespace
 unsigned const K = 48;
 typedef KMer<K> Kmer;
 typedef KMer<K-1> SubKmer;
-typedef KmerDictEntry<K> Entry;
-typedef KmerDict<K> Dict;
+template <typename B>
+using Entry =  KmerDictEntry<K,B>;
+template <typename B>
+using Dict = KmerDict<K, B>;
 typedef KmerVec<K> KVec;
 typedef UnipathGraph<K> Graph;
 typedef std::vector<std::atomic_size_t> SpectrumBins;
@@ -86,7 +88,8 @@ private:
     qvec mQV;
 };
 
-inline void summarizeEntries( Entry* e1, Entry* e2 )
+template <typename B>
+inline void summarizeEntries( Entry<B>* e1, Entry<B>* e2 )
 {
     KMerContext kc;
     size_t count = 0;
@@ -101,7 +104,8 @@ inline void summarizeEntries( Entry* e1, Entry* e2 )
     kDef.setCount(count);
 }
 
-inline bool areIgnoredBarcodes( Entry* e1, Entry* e2 )
+template <typename B>
+inline bool areIgnoredBarcodes( Entry<B>* e1, Entry<B>* e2 )
 {
      while ( e2-- != e1 ) {
           if (e2->getTempBC() == -1 ) return true;
@@ -109,7 +113,8 @@ inline bool areIgnoredBarcodes( Entry* e1, Entry* e2 )
      return false;
 }
 
-inline bool areEnoughBarcodes( Entry* e1, Entry* e2, unsigned mMinBC )
+template <typename B>
+inline bool areEnoughBarcodes( Entry<B>* e1, Entry<B>* e2, unsigned mMinBC )
 {
      // this is not done in summarizeEntries because doing so
      // would require counting uniqueness in a large set when mMinBC is
@@ -131,9 +136,11 @@ inline bool areEnoughBarcodes( Entry* e1, Entry* e2, unsigned mMinBC )
      return ( count >= mMinBC );
 }
 
+template <typename B>
 class Kmerizer
 {
 public:
+    using EntryType = Entry<B>;
     Kmerizer( vecbvec const& reads, std::vector<unsigned> const& goodLengths,
                 unsigned minFreq, int64_t ignBcBelow, unsigned minBC, vec<int32_t> const* pBC,
                 KVec* pKVec, std::atomic_size_t* pTotKmers )
@@ -154,17 +161,17 @@ public:
       auto beg = mReads[readId].begin(), itr=beg+K, last=beg+(len-1);
       Kmer kkk(beg);
       KMerContext kc = KMerContext::initialContext(*itr);
-      *oItr++ = kkk.isRev() ? Entry(Kmer(kkk).rc(),kc.rc(),bc) : Entry(kkk,kc,bc);
+      *oItr++ = kkk.isRev() ? EntryType(Kmer(kkk).rc(),kc.rc(),bc) : EntryType(kkk,kc,bc);
       while ( itr != last )
       { unsigned char pred = kkk.front();
         kkk.toSuccessor(*itr); ++itr;
         kc = KMerContext(pred,*itr);
-        *oItr++ = kkk.isRev() ? Entry(Kmer(kkk).rc(),kc.rc(),bc) : Entry(kkk,kc,bc); }
+        *oItr++ = kkk.isRev() ? EntryType(Kmer(kkk).rc(),kc.rc(),bc) : EntryType(kkk,kc,bc); }
       kc = KMerContext::finalContext(kkk.front());
       kkk.toSuccessor(*last);
-      *oItr++ = kkk.isRev() ? Entry(Kmer(kkk).rc(),kc.rc(),bc) : Entry(kkk,kc,bc); }
+      *oItr++ = kkk.isRev() ? EntryType(Kmer(kkk).rc(),kc.rc(),bc) : EntryType(kkk,kc,bc); }
 
-    void reduce( Entry* e1, Entry* e2 )
+    void reduce( EntryType* e1, EntryType* e2 )
     { summarizeEntries(e1,e2);
       bool bc_test = true;
       if ( mpBC ) bc_test = \
@@ -173,7 +180,7 @@ public:
       { ++mNKmers;
         if ( mpKVec ) mpKVec->insertEntry(std::move(*e1)); } }
 
-    Entry* overflow( Entry* e1, Entry* e2 )
+    EntryType* overflow( EntryType* e1, EntryType* e2 )
     { if ( e2-e1 > 1 ) summarizeEntries(e1,e2); return e1+1; }
 
 private:
@@ -187,7 +194,7 @@ private:
     std::atomic_size_t* mpTotKmers;
     size_t mNKmers;
 };
-typedef MapReduceEngine<Kmerizer,Entry,Kmer::Hasher> KMRE;
+typedef MapReduceEngine<Kmerizer<BCWrapper>,Entry<BCWrapper>,Kmer::Hasher> KMRE;
 
 void WriteKmerSpectrum( KVec * pVec, String JSON_DIR = "" )
 {
@@ -208,7 +215,7 @@ void WriteKmerSpectrum( KVec * pVec, String JSON_DIR = "" )
           WriteHistToJson(kmerspec, int64_t(0), max_count, int64_t(1), JSON_DIR, "kmer_count", "DF");
 }
 
-Dict* createDict( String const& work_dir, vecbvec const& reads, ObjectManager<VecPQVec>& quals,
+Dict<BCWrapper>* createDict( String const& work_dir, vecbvec const& reads, ObjectManager<VecPQVec>& quals,
                         unsigned minQual, unsigned minFreq, int64_t ignBcBelow = 0,
                         float const mem_frac = 0.9,
                          unsigned minBC = 2, vec<int32_t> const* bcp = nullptr )
@@ -261,7 +268,7 @@ Dict* createDict( String const& work_dir, vecbvec const& reads, ObjectManager<Ve
     if ( true )
     { // count uniq kmers that occur at minFreq or more
         std::atomic_size_t nUniqKmers(0);
-        Kmerizer impl(reads,goodLens,minFreq,ignBcBelow,minBC,bcp,nullptr,&nUniqKmers);
+        Kmerizer<BCWrapper> impl(reads,goodLens,minFreq,ignBcBelow,minBC,bcp,nullptr,&nUniqKmers);
         KMRE mre(impl);
         if ( !mre.run(nKmers,0ul,reads.size(),
 				KMRE::VERBOSITY::QUIET, mem_frac) )
@@ -272,7 +279,7 @@ Dict* createDict( String const& work_dir, vecbvec const& reads, ObjectManager<Ve
 //    KVec* pVec = new KVec(reads.size()*(150-48)/50);
     KVec* pVec = new KVec(dictSize);
     PRINT( pVec->size() );
-    Kmerizer impl(reads, goodLens, minFreq, ignBcBelow, minBC, bcp, pVec, nullptr);
+    Kmerizer<BCWrapper> impl(reads, goodLens, minFreq, ignBcBelow, minBC, bcp, pVec, nullptr);
     KMRE mre(impl);
     if ( !mre.run(nKmers,0ul,reads.size(),
 			    KMRE::VERBOSITY::NOISY, mem_frac) )
@@ -294,7 +301,7 @@ Dict* createDict( String const& work_dir, vecbvec const& reads, ObjectManager<Ve
     BinaryIteratingReader<KVec> vecReader( work_dir+"/kmers.kvec" );
 
     MEM(after_kmer_before_dict);
-    Dict* pDict = new Dict(nkmers,0.9);
+    Dict<BCWrapper>* pDict = new Dict<BCWrapper>(nkmers,0.9);
     MEM(alloc_dict);
     for ( auto itr = vecReader.begin(); itr != vecReader.end(); ++itr )
          pDict->insertEntry(*itr);
@@ -317,13 +324,15 @@ Dict* createDict( String const& work_dir, vecbvec const& reads, ObjectManager<Ve
     return pDict;
 }
 
+template <typename B>
 class EdgeBuilder
 {
 public:
-    EdgeBuilder( Dict const& dict, vecbvec* pEdges )
+    using EntryType = Entry<B>;
+    EdgeBuilder( Dict<B> const& dict, vecbvec* pEdges )
     : mDict(dict), mEdges(*pEdges) {}
 
-    void buildEdge( Entry const& entry )
+    void buildEdge( EntryType const& entry )
     { if ( isPalindrome(entry) )
         make1KmerEdge(entry);
       else if ( upstreamExtensionPossible(entry) )
@@ -336,8 +345,8 @@ public:
         make1KmerEdge(entry); }
 
     // not thread-safe
-    void simpleCircle( Entry const& entry )
-    { Entry const* pFirstEntry = &entry;
+    void simpleCircle( EntryType const& entry )
+    { EntryType const* pFirstEntry = &entry;
       mEdgeSeq.assign(entry.begin(),entry.end());
       mEdgeEntries.push_back(pFirstEntry);
       KMerContext context = entry.getKDef().getContext();
@@ -347,7 +356,7 @@ public:
         ForceAssertEq(context.getSuccessorCount(),1u);
         unsigned char succCode = context.getSingleSuccessor();
         kmer.toSuccessor(succCode);
-        Entry const* pEntry = lookup(kmer,&context);
+        EntryType const* pEntry = lookup(kmer,&context);
         if ( pEntry == pFirstEntry )
           break;
         if ( !pEntry->getKDef().isNull() )
@@ -396,7 +405,7 @@ private:
       subKmer.toSuccessor(kmer.back());
       return subKmer.isPalindrome(); }
 
-    bool upstreamExtensionPossible( Entry const& entry )
+    bool upstreamExtensionPossible( EntryType const& entry )
     { KMerContext context = entry.getKDef().getContext();
       if ( context.getPredecessorCount() != 1 )
         return false;
@@ -407,7 +416,7 @@ private:
       lookup(pred,&context);
       return context.getSuccessorCount() == 1; }
 
-    bool downstreamExtensionPossible( Entry const& entry )
+    bool downstreamExtensionPossible( EntryType const& entry )
     { KMerContext context = entry.getKDef().getContext();
       if ( context.getSuccessorCount() != 1 )
         return false;
@@ -418,17 +427,17 @@ private:
       lookup(succ,&context);
       return context.getPredecessorCount() == 1; }
 
-    void make1KmerEdge( Entry const& entry )
+    void make1KmerEdge( EntryType const& entry )
     { mEdgeSeq.assign(entry.begin(),entry.end());
       mEdgeEntries.push_back(&entry);
       addEdge(); }
 
-    void extendUpstream( Entry const& entry )
+    void extendUpstream( EntryType const& entry )
     { mEdgeSeq.assign(entry.rcbegin(),entry.rcend());
       mEdgeEntries.push_back(&entry);
       extend(Kmer(entry).rc(),entry.getKDef().getContext().rc()); }
 
-    void extendDownstream( Entry const& entry )
+    void extendDownstream( EntryType const& entry )
     { mEdgeSeq.assign(entry.begin(),entry.end());
        mEdgeEntries.push_back(&entry);
        extend(entry,entry.getKDef().getContext()); }
@@ -440,7 +449,7 @@ private:
         next.toSuccessor(succCode);
         if ( isPalindrome(next) )
           break;
-        Entry const* pEntry = lookup(next,&context);
+        EntryType const* pEntry = lookup(next,&context);
         if ( context.getPredecessorCount() != 1 )
           break;
         mEdgeSeq.push_back(succCode);
@@ -454,8 +463,8 @@ private:
        case CanonicalForm::REV:
          mEdgeSeq.clear(); mEdgeEntries.clear(); break; } }
 
-    Entry const* lookup( Kmer const& kmer, KMerContext* pContext )
-    { Entry const* result;
+    EntryType const* lookup( Kmer const& kmer, KMerContext* pContext )
+    { EntryType const* result;
       if ( kmer.isRev() )
       { result = mDict.findEntryCanonical(Kmer(kmer).rc());
         ForceAssert(result);
@@ -480,7 +489,7 @@ private:
         mEdges.push_back(mEdgeSeq); }
       unsigned offset = 0;
       bool err = false;
-      for ( Entry const* pEnt : mEdgeEntries )
+      for ( EntryType const* pEnt : mEdgeEntries )
       { KDef const& kDef = pEnt->getKDef();
         if ( kDef.isNull() )
         { Assert(std::equal(pEnt->begin(),pEnt->end(),mEdgeSeq.begin(offset)) ||
@@ -496,18 +505,20 @@ private:
         mEdgeSeq.clear();
         mEdgeEntries.clear(); }
 
-    Dict const& mDict;
+    Dict<B> const& mDict;
     vecbvec& mEdges;
-    std::vector<Entry const*> mEdgeEntries;
+    std::vector<EntryType const*> mEdgeEntries;
     bvec mEdgeSeq;
 };
 
-void buildEdges( Dict const& dict, vecbvec* pEdges )
+template <typename B>
+void buildEdges( Dict<B> const& dict, vecbvec* pEdges )
 {
-    EdgeBuilder eb(dict,pEdges);
+    using EntryType = Entry<B>;
+    EdgeBuilder<B> eb(dict,pEdges);
     dict.parallelForEachHHS(
-            [eb]( Dict::Set::HHS const& hhs ) mutable
-            { for ( Entry const& entry : hhs )
+            [eb]( typename Dict<B>::Set::HHS const& hhs ) mutable
+            { for ( EntryType const& entry : hhs )
                 if ( entry.getKDef().isNull() )
                   eb.buildEdge(entry); });
 
@@ -682,10 +693,13 @@ private:
     unsigned mEdgeLen;
 };
 
+template <typename B>
 class Pather
 {
 public:
-    Pather( Dict const& dict, vecbvec const& edges )
+    using EntryType = Entry<B>;
+
+    Pather( Dict<B> const& dict, vecbvec const& edges )
     : mDict(dict), mEdges(edges) {}
 
     std::vector<PathPart> const& path( bvec const& read )
@@ -699,7 +713,7 @@ public:
       auto end = read.end()-K+1;
       while ( itr != end )
       { Kmer kmer(itr);
-        Entry const* pEnt = mDict.findEntry(kmer);
+        EntryType const* pEnt = mDict.findEntry(kmer);
         if ( !pEnt )
         {
           unsigned gapLen = 1u;
@@ -744,7 +758,7 @@ public:
         auto end = read.end() - K + 1;
         while (itr != end) {
             Kmer kmer(itr);
-            Entry const* pEnt = mDict.findEntry(kmer);
+            EntryType const* pEnt = mDict.findEntry(kmer);
             if (!pEnt) {
                 unsigned gapLen = 1u;
                 auto itr2 = itr + K;
@@ -819,7 +833,7 @@ public:
         while ( itr != end ) {
             int qSumRemain = 21;        // reset per edge
             Kmer kmer(itr);
-            Entry const* pEnt = mDict.findEntry(kmer);
+            EntryType const* pEnt = mDict.findEntry(kmer);
             int gapLen = 0;
             if ( !pEnt ) {
                 ++gapLen;
@@ -887,16 +901,18 @@ public:
       return os; }
 
 private:
-    Dict const& mDict;
+    Dict<B> const& mDict;
     vecbvec const& mEdges;
     std::vector<PathPart> mPathParts;
 };
 
+template <typename B>
 class GapFiller
 {
 public:
+    using EntryType = Entry<B>;
     GapFiller( vecbvec const& reads, vecbvec const& edges, unsigned maxGapSize,
-                    unsigned minFreq, Dict* pDict )
+                    unsigned minFreq, Dict<B>* pDict )
     : mReads(reads), mDict(*pDict), mPather(*pDict,edges),
       mMaxGapSize(maxGapSize), mMinFreq(minFreq) {}
 
@@ -926,42 +942,43 @@ public:
         { unsigned char predCode = kkk.front();
           kkk.toSuccessor(*itr);
           KMerContext kc(predCode,*++itr);
-          *oItr++ = kkk.isRev()?Entry(Kmer(kkk).rc(),kc.rc()) : Entry(kkk,kc); }
+          *oItr++ = kkk.isRev()?EntryType(Kmer(kkk).rc(),kc.rc()) : EntryType(kkk,kc); }
         KMerContext kc = KMerContext::finalContext(kkk.front());
         kkk.toSuccessor(*itr);
         update(kkk,kc);
         rItr += pPart->getLength(); } }
 
-    void reduce( Entry* e1, Entry* e2 )
+    void reduce( EntryType* e1, EntryType* e2 )
     { summarizeEntries(e1,e2);
       if ( e1->getKDef().getCount() >= mMinFreq )
       { mDict.insertEntry(std::move(*e1)); } }
 
-    Entry* overflow( Entry* e1, Entry* e2 )
+    EntryType* overflow( EntryType* e1, EntryType* e2 )
     { if ( e2-e1 > 1 ) summarizeEntries(e1,e2); return e1+1; }
 
 private:
     void update( Kmer kmer, KMerContext kc )
     { if ( kmer.isRev() ) { kmer.rc(); kc=kc.rc(); }
       mDict.applyCanonical(kmer,
-              [kc](Entry const& ent)
+              [kc](EntryType const& ent)
               { KDef& kd = const_cast<KDef&>(ent.getKDef());
                 kd.setContext(kc|kd.getContext()); }); }
 
     static unsigned const MAX_JITTER = 1;
     vecbvec const& mReads;
-    Dict& mDict;
-    Pather mPather;
+    Dict<B>& mDict;
+    Pather<B> mPather;
     unsigned mMaxGapSize;
     unsigned mMinFreq;
 };
-typedef MapReduceEngine<GapFiller,Entry,Kmer::Hasher> GFMRE;
+typedef MapReduceEngine<GapFiller<BCWrapper>,Entry<BCWrapper>,Kmer::Hasher> GFMRE;
 
+template <typename B>
 void fillGaps( vecbvec const& reads, unsigned maxGapSize, unsigned minFreq,
-                    vecbvec* pEdges, Dict* pDict )
+                    vecbvec* pEdges, Dict<B>* pDict )
 {
     cout << Date() << ": filling gaps." << endl;
-    GapFiller gf(reads,*pEdges,maxGapSize,minFreq,pDict);
+    GapFiller<B> gf(reads,*pEdges,maxGapSize,minFreq,pDict);
     GFMRE mre(gf);
 
     if ( !mre.run(5*reads.size(),0ul,reads.size()) )
@@ -976,11 +993,12 @@ void fillGaps( vecbvec const& reads, unsigned maxGapSize, unsigned minFreq,
     buildEdges(*pDict,pEdges);
 }
 
-void pathRef( String const& refFasta, Dict const& dict, vecbvec const& edges )
+template <typename B>
+void pathRef( String const& refFasta, Dict<B> const& dict, vecbvec const& edges )
 {
     vecbvec ref;
     FastFetchReads(ref,nullptr,refFasta);
-    Pather pather(dict,edges);
+    Pather<B> pather(dict,edges);
     for ( bvec const& refTig : ref )
     {
         pather.path(refTig);
@@ -1034,10 +1052,11 @@ private:
     unsigned mOverlap;
 };
 
+template <typename B>
 class Joiner
 {
 public:
-    Joiner( vecbvec const& reads, vecbvec const& edges, Dict const& dict,
+    Joiner( vecbvec const& reads, vecbvec const& edges, Dict<B> const& dict,
                     unsigned maxGapSize, unsigned minFreq,
                     vecbvec* pFakeReads )
     : mReads(reads), mEdges(edges), mPather(dict,edges),
@@ -1115,20 +1134,21 @@ private:
 
     vecbvec const& mReads;
     vecbvec const& mEdges;
-    Pather mPather;
+    Pather<B> mPather;
     unsigned mMaxGapSize;
     unsigned mMinFreq;
     vecbvec& mFakeReads;
 };
-typedef MapReduceEngine<Joiner,Join,Join::Hasher> JMRE;
+typedef MapReduceEngine<Joiner<BCWrapper>,Join,Join::Hasher> JMRE;
 
+template <typename B>
 void joinOverlaps( vecbvec const& reads, unsigned maxGapSize, unsigned minFreq,
-                        vecbvec* pEdges, Dict* pDict )
+                        vecbvec* pEdges, Dict<B>* pDict )
 {
     //std::cout << Date() << ": joining overlaps." << std::endl;
     vecbvec fakeReads;
     fakeReads.reserve(pEdges->size()/10);
-    Joiner joiner(reads,*pEdges,*pDict,maxGapSize,minFreq,&fakeReads);
+    Joiner<B> joiner(reads,*pEdges,*pDict,maxGapSize,minFreq,&fakeReads);
     JMRE mre(joiner);
     if ( !mre.run(reads.size(),0ul,reads.size()) )
         FatalErr("Map/Reduce operation failed when joining overlaps.");
@@ -1147,13 +1167,14 @@ void joinOverlaps( vecbvec const& reads, unsigned maxGapSize, unsigned minFreq,
 }
 
 
+template <typename B>
 class HBVPather
 {
 public:
     typedef enum {ALGORITHM_ONE, ALGORITHM_TWO} Algorithm;
 
     HBVPather( VirtualMasterVec<BaseVec> const& reads, VirtualMasterVec<PQVec> quals,
-                Dict const& dict, vecbvec const& edges,
+                Dict<B> const& dict, vecbvec const& edges,
                 HyperBasevector const& hbv,
                 vec<int> const& fwdEdgeXlat, vec<int> const& revEdgeXlat,
                 Algorithm alg, ReadPathVec* pPaths, Bool const verbose = False )
@@ -1406,7 +1427,7 @@ private:
     vec<int> mToLeft, mToRight;
     vec<int> const& mFwdEdgeXlat;
     vec<int> const& mRevEdgeXlat;
-    Pather mPather;
+    Pather<B> mPather;
     Algorithm mAlgorithm;
     ReadPathVec& mPaths;
     size_t mPathsOffset;
@@ -1416,27 +1437,34 @@ private:
     qvec mQV;
 };
 
+template <typename B>
 void pathReads( VirtualMasterVec<BaseVec> const& reads, VirtualMasterVec<PQVec>& quals,
-                Dict const& dict, vecbvec const& edges,
+                Dict<B> const& dict, vecbvec const& edges,
                 HyperBasevector const& hbv,
                 vec<int> const& fwdEdgeXlat, vec<int> const& revEdgeXlat,
                 String const& paths_file, Bool const NEW_ALIGNER = False,
                 Bool const VERBOSE = False )
 {
     auto ncores = getConfiguredNumThreads();
-    size_t batchsize = 100000;
-    ReadPathVec pPaths(ncores*batchsize);
+    size_t batchsize = 500000;
+    ReadPathVec pPaths;
     IncrementalWriter<ReadPath> out_paths(paths_file);
-    auto algorithm = NEW_ALIGNER ? HBVPather::ALGORITHM_TWO : HBVPather::ALGORITHM_ONE;
-    HBVPather pather(reads.clone(),quals.clone(),dict,edges,hbv,fwdEdgeXlat,revEdgeXlat,
+    auto algorithm = NEW_ALIGNER ? HBVPather<B>::ALGORITHM_TWO : HBVPather<B>::ALGORITHM_ONE;
+    HBVPather<B> pather(reads.clone(),quals.clone(),dict,edges,hbv,fwdEdgeXlat,revEdgeXlat,
               algorithm,&pPaths,VERBOSE);
 
-    for ( size_t offset = 0; offset < reads.size(); offset += batchsize*ncores ) {
+    ForceAssertGt(reads.size(), 0u);
+    size_t maxIter = ( reads.size() - 1 ) / ( batchsize*ncores ) + 1;
+    for ( size_t iter = 0; iter < maxIter; ++iter ) {
+         cout << Date() << ": pathing iteration " << iter+1 << " of " << maxIter << endl;
+         size_t offset = batchsize*ncores*iter;
+         pPaths.resize(ncores*batchsize);
          pather.setPathsOffset(offset);
          size_t this_run = std::min( offset+batchsize*ncores, reads.size() );
          parallelForBatch(offset,this_run,batchsize,pather);
          for ( size_t i = 0; i < this_run - offset; ++i )
               out_paths.add(pPaths[i]);
+         pPaths.clear();
     }
 }
 
@@ -1454,6 +1482,7 @@ void repathUnpathedReads(const vecbvec& reads, const VecPQVec& quals,
 
 } // end of anonymous namespace
 
+#if 0
 static void parseLineFromTsv(std::string& line, vec<string>& lineVec) {
   size_t begin = 0;
   size_t end;
@@ -1589,6 +1618,72 @@ int loadMsp(std::string const filename, vecbvec &edges, Dict **ppDict) {
 
   return 0;
 }
+#endif
+
+void mspEdgesToHBV( vec<basevector> const& edges, HyperBasevector& hbv, const int K,
+         vec<int>& fwdEdgeXlat, vec<int>& revEdgeXlat )
+{
+     vecbasevector vedges(edges.begin(), edges.end());
+     buildHBVFromEdges(vedges, K, &hbv, &fwdEdgeXlat, &revEdgeXlat);
+}
+
+
+void buildGraphFromMSP( String const& work_dir, 
+        String const& reads_name,
+        String const& quals_name,
+        String const& MSPEDGES,
+        HyperBasevector& hbv, 
+        const int K, 
+        ReadPathVec& paths)
+{
+     MEM(before_msp_graph);
+     vec<basevector> medges;
+     cout << Date() << ": reading MSP edge file " << MSPEDGES << endl;
+     BinaryReader::readFile( MSPEDGES, &medges );
+     cout << Date() << ": read " << medges.size() << " edges " << endl;
+
+     MEM(before_msp_edges_to_hbv);
+     vec<int> fwdEdgeXlat, revEdgeXlat;
+     cout << Date() << ": before mspEdgesToHBV" << endl;
+     mspEdgesToHBV(medges, hbv, K, fwdEdgeXlat, revEdgeXlat);
+     cout << Date() << ": after mspEdgesToHBV" << endl;
+
+     size_t nKmers = 0;
+     for ( int i = 0; i < medges.isize(); ++i ) 
+          nKmers += medges[i].size() - (K-1);
+
+     MEM(before_msp_dict);
+     Dict<BCEmpty> dict(nKmers, 0.9);
+     for ( int e = 0; e < medges.isize(); ++e ) {
+          auto const& edge = medges[e];
+          for ( int i = 0; i < edge.isize() - K + 1; ++i ) {
+               Kmer kmer( edge.begin(i) );
+               EdgeID edgeid(e);
+               dict[kmer].set(edgeid,i);
+          }
+     }
+     MEM(after_msp_dict);
+     cout << Date() << ": populated dictionary covers " << ToStringAddCommas(dict.size()) << " kmers" << endl;
+
+
+     cout << Date( ) << ": virtualing quals, mem = " << MemUsageGBString( ) << endl;
+     VirtualMasterVec<PQVec> vquals( quals_name );
+     cout << Date( ) << ": virtualing bases, mem = " << MemUsageGBString( ) << endl;
+     VirtualMasterVec<BaseVec> vreads( reads_name );
+     cout << Date( ) << ": pathing reads, mem = " << MemUsageGBString( ) << endl;
+     auto const& hbv_edges=hbv.Edges();
+
+     vecbasevector edges(medges.begin(), medges.end());
+
+     MEM(before_msp_path);
+     cout << Date() << ": pathing reads" << endl;
+     pathReads(vreads,vquals,dict,edges,hbv,
+               fwdEdgeXlat,revEdgeXlat,work_dir+"/tmp.paths",True,False);
+     cout << Date() << ": done pathing reads" << endl;
+     MEM(after_msp_path);
+}
+
+
 
 void buildReadQGraph48(String const& work_dir,
                        String const& read_head,
@@ -1609,14 +1704,10 @@ void buildReadQGraph48(String const& work_dir,
   ForceAssertEq(doJoinOverlaps, False);
   ForceAssertEq(repathUnpathed, False);
   vecbvec edges;
-  Dict *pDict;
+  Dict<BCWrapper> *pDict;
 
   if (mspFilename.size() > 0) {
-    cout << Date() << ": loading graph and kmers." << endl;
-    int rc = loadMsp(mspFilename, edges, &pDict);
-    if (rc != 0) {
-      exit(rc);
-    }
+       FatalErr("old Msp not supported");
   } else {
     cout << Date() << ": loading reads." << endl;
 
@@ -1666,9 +1757,11 @@ void buildReadQGraph48(String const& work_dir,
       quals.unload();
       MEM(quals_unload);
 
-      cout << Date() << ": done re-reading reads" << endl;
+      cout << Date( ) << ": virtualing quals, mem = " << MemUsageGBString( ) << endl;
       VirtualMasterVec<PQVec> vquals( quals.filename() );
+      cout << Date( ) << ": virtualing bases, mem = " << MemUsageGBString( ) << endl;
       VirtualMasterVec<BaseVec> vreads( work_dir + read_head + ".fastb" );
+      cout << Date( ) << ": pathing reads, mem = " << MemUsageGBString( ) << endl;
       pathReads(vreads,vquals,*pDict,edges,*pHBV,
                 fwdEdgeXlat,revEdgeXlat,work_dir+"/tmp.paths",useNewAligner,VERBOSE);
       MEM(after_pathing);
@@ -1676,17 +1769,6 @@ void buildReadQGraph48(String const& work_dir,
       pDict = 0;
       MEM(after_delete_dict);
 
-      cout << Date() << ": re-reading reads" << endl;
-      reads.ReadAll( work_dir + read_head + ".fastb" );
-      MEM(re_read_reads);
-
-      pPaths->ReadAll( work_dir+"/tmp.paths" );
-      MEM(re_read_paths);
-      Remove( work_dir+"/tmp.paths" );
-
-
-//      cout << Date( ) << ": at repathUnpathed" << endl;
-//      if (repathUnpathed)
-//        repathUnpathedReads(reads,quals.load(),*pHBV, *pPaths);
+      // paths now read back in DF.cc as pathsX
     }
 }

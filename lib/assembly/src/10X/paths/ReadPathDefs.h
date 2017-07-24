@@ -7,6 +7,7 @@
 #include "paths/long/ReadPath.h"
 #include "paths/HyperBasevector.h"
 #include "feudal/MasterVec.h"
+#include "feudal/BinaryStream.h"
 
 enum CODING_SCHEME{FIXED_WIDTH, HUFFMAN};
 

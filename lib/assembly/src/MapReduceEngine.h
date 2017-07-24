@@ -112,6 +112,8 @@ class MapReduceEngine
                #pragma omp critical
                {    double memoryFrac = 0.9;
                     int64_t maxMem = MemAvailable(memoryFrac);
+                    cout << endl << Date( ) 
+                         << ": thread " << omp_get_thread_num( ) << endl;
                     cout << Date( ) << ": KeyBuf constructor sees " 
                          << ToStringAddCommas(maxMem) << " bytes available" << endl;
                     cout << Date( ) << ": /proc/meminfo says "
@@ -436,6 +438,8 @@ public:
         {
                #pragma omp critical
                {    maxMem = MemAvailable(memoryFrac);
+                    cout << endl << Date( ) 
+                         << ": thread " << omp_get_thread_num( ) << endl;
                     cout << Date( ) << ": MapReduceEngine::run sees " 
                          << ToStringAddCommas(maxMem) << " bytes available" << endl;
                     cout << Date( ) << ": /proc/meminfo says "

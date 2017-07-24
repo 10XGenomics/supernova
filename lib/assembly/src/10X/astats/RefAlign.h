@@ -108,7 +108,8 @@ template<int K> void RefAlignCore(
 
      // More control.
      
-     const Bool allow_second_best = False
+     const Bool allow_second_best = False,
+     const Bool optb = False
 
 );
 

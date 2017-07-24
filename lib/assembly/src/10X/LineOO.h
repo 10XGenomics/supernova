@@ -19,7 +19,7 @@ void BarcodePos( const vec<int32_t>& bc, const HyperBasevectorX& hb,
      const digraphE<vec<int>>& D, const vec<int>& dinv,
      const ReadPathVec& dpaths, const IntIndex& dpaths_index,
      const vec<vec<vec<vec<int>>>>& dlines, vec<vec<pair<int,int>>>& lbp,
-     const int view );
+     const int view, const Bool verbose = True );
 
 double ScoreOrder( 
      const vec<int>& L,                    // list of line ids
@@ -30,6 +30,12 @@ double ScoreOrder(
 double ScoreOrder( 
      const vec<int>& L,                    // list of line ids
      VirtualMasterVec<SerfVec<pair<int,int>>> lbpx,  // barcode positions on lines
+     const vec<int>& llens,                // line lengths
+     vec< triple<int,int,int> >& M );      // scratch
+
+double ScoreOrder( 
+     const vec<int>& L,                    // list of line ids
+     MasterVec<SerfVec<pair<int,int>>> lbpx,  // barcode positions on lines
      const vec<int>& llens,                // line lengths
      vec< triple<int,int,int> >& M );      // scratch
 

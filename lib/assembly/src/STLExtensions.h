@@ -719,6 +719,191 @@ template<class T1, class T2, class T3, class T4> int64_t UpperBound1(
      return first;    }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/// Class quint is just like class pair, but has five elements.
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+struct quint {
+  typedef _T1 first_type;
+  typedef _T2 second_type;
+  typedef _T3 third_type;
+  typedef _T4 fourth_type;
+  typedef _T5 fifth_type;
+  _T1 first;
+  _T2 second;
+  _T3 third;
+  _T4 fourth;
+  _T5 fifth;
+  quint() : first(), second(), third(), fourth(), fifth() {}
+  quint(const _T1& __a, const _T2& __b, const _T3& __c, const _T4& __d, 
+     const _T5& __e)
+       : first(__a), second(__b), third(__c), fourth(__d), fifth(__e) {}
+  template <class _U1, class _U2, class _U3, class _U4, class _U5>
+  quint(const quint<_U1, _U2, _U3, _U4, _U5>& __p)
+       : first(__p.first), second(__p.second), 
+         third(__p.third), fourth(__p.fourth), fifth(__p.fifth) {}
+
+  friend int compare( quint const& t1, quint const& t2 )
+  {
+      int result = compare(t1.first,t2.first);
+      if ( !result ) result = compare(t1.second,t2.second);
+      if ( !result ) result = compare(t1.third,t2.third);
+      if ( !result ) result = compare(t1.fourth,t2.fourth);
+      if ( !result ) result = compare(t1.fifth,t2.fifth);
+      return result;
+  }
+
+  void writeBinary( BinaryWriter& bw )
+  { bw.write(first); bw.write(second); bw.write(third); 
+    bw.write(fourth); bw.write(fifth); }
+  void readBinary( BinaryReader& br )
+  { br.read(&first); br.read(&second); br.read(&third), 
+    br.read(&fourth); br.read(&fifth); }
+  static size_t externalSizeof()
+  { size_t sz1 = BinaryReader::externalSizeof(static_cast<_T1*>(0));
+    size_t sz2 = BinaryReader::externalSizeof(static_cast<_T2*>(0));
+    size_t sz3 = BinaryReader::externalSizeof(static_cast<_T3*>(0));
+    size_t sz4 = BinaryReader::externalSizeof(static_cast<_T4*>(0));
+    size_t sz5 = BinaryReader::externalSizeof(static_cast<_T5*>(0));
+    return sz1 && sz2 && sz3 && sz4 && sz5 ? sz1+sz2+sz3+sz4+sz5 : 0UL; }
+};
+
+template <class ST1, class ST2, class ST3, class ST4, class ST5>
+struct QuintSerializability
+{ typedef SelfSerializable type; };
+
+template <>
+struct QuintSerializability<TriviallySerializable,
+                                TriviallySerializable,
+                                TriviallySerializable,
+                                TriviallySerializable,
+                                TriviallySerializable>
+{ typedef TriviallySerializable type; };
+
+template <class T1, class T2, class T3, class T4, class T5>
+struct Serializability<quint<T1,T2,T3,T4,T5> >
+{ typedef typename Serializability<T1>::type T1ST;
+  typedef typename Serializability<T2>::type T2ST;
+  typedef typename Serializability<T3>::type T3ST;
+  typedef typename Serializability<T4>::type T4ST;
+  typedef typename Serializability<T5>::type T5ST;
+  typedef typename QuintSerializability<T1ST,T2ST,T3ST,T4ST,T5ST>::type type; };
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline bool operator==(const quint<_T1, _T2, _T3, _T4, _T5>& __x,
+     const quint<_T1, _T2, _T3, _T4, _T5>& __y)
+{
+  return __x.first == __y.first && __x.second == __y.second
+       && __x.third == __y.third && __x.fourth == __y.fourth    
+       && __x.fifth == __y.fifth;
+}
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline bool operator<(const quint<_T1, _T2, _T3, _T4, _T5>& __x,
+     const quint<_T1, _T2, _T3, _T4, _T5>& __y)
+{
+     if ( __x.first < __y.first ) return true;
+     if ( __x.first > __y.first ) return false;
+     if ( __x.second < __y.second ) return true;
+     if ( __x.second > __y.second ) return false;
+     if ( __x.third < __y.third ) return true;
+     if ( __x.third > __y.third ) return false;
+     if ( __x.fourth < __y.fourth ) return true;
+     if ( __x.fourth > __y.fourth ) return false;
+     if ( __x.fifth < __y.fifth ) return true;
+     return false;
+}
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline bool operator!=(const quint<_T1, _T2, _T3, _T4, _T5>& __x,
+     const quint<_T1, _T2, _T3, _T4, _T5>& __y) {
+  return !(__x == __y);
+}
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline bool operator>(const quint<_T1, _T2, _T3, _T4, _T5>& __x,
+     const quint<_T1, _T2, _T3, _T4, _T5>& __y) {
+  return __y < __x;
+}
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline bool operator<=(const quint<_T1, _T2, _T3, _T4, _T5>& __x,
+     const quint<_T1, _T2, _T3, _T4, _T5>& __y) {
+  return !(__y < __x);
+}
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline bool operator>=(const quint<_T1, _T2, _T3, _T4, _T5>& __x,
+     const quint<_T1, _T2, _T3, _T4, _T5>& __y) {
+  return !(__x < __y);
+}
+
+template <class _T1, class _T2, class _T3, class _T4, class _T5>
+inline quint<_T1, _T2, _T3, _T4, _T5> make_quint(const _T1& __x, const _T2& __y, const _T3& __z, const _T4& __w, const _T5& __v)
+{
+  return quint<_T1, _T2, _T3, _T4, _T5>(__x, __y, __z, __w, __v);
+}
+
+
+template<class T1, class T2, class T3, class T4, class T5> int64_t LowerBound1(
+     const vector< quint<T1,T2,T3,T4,T5> >& x, const T1& t )
+{    int64_t count = x.size( ), it, step, first = 0;
+     while ( count > 0 )
+     {    it = first;
+          step = count/2;
+          it += step;
+          if ( x[it].first < t )
+          {    first = ++it;
+               count -= step + 1;    }
+          else count = step;    }
+     return first;    }
+
+template<class T1, class T2, class T3, class T4, class T5> int64_t UpperBound1(
+     const vector< quint<T1,T2,T3,T4,T5> >& x, const T1& t )
+{    int64_t count = x.size( ), it, step, first = 0;
+     while ( count > 0 )
+     {    it = first;
+          step = count/2;
+          it += step;
+          if ( !( t < x[it].first ) )
+          {    first = ++it;
+               count -= step + 1;    }
+          else count = step;    }
+     return first;    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // BinPosition1.  Using .first, return the position of an element in a sorted
 // vector, else -1.  If the element appears more than once, the position of
 // one of its instances is returned.

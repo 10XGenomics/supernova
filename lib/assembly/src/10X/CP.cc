@@ -42,6 +42,7 @@
 #include "10X/SuperFiles.h"
 #include "10X/astats/AlignFin.h"
 #include "10X/astats/AssemblyStats.h"
+#include "10X/astats/GenomeAlign.h"
 #include "10X/astats/RefAlign.h"
 #include "10X/astats/RefLookup.h"
 #include "10X/astats/View.h"
@@ -59,8 +60,8 @@ int main( int argc, char *argv[] )
      // Define arguments that are not in the customer pipeline.
 
      #if !defined(CS)
-     CommandArgument_String_OrDefault_Doc(SAMPLE, "NA12878",
-          "sample name; human or NA12878 or HGP or unknown");
+     CommandArgument_String_OrDefault_Doc(SAMPLE, "unknown",
+          "sample name; human or NA12878 or HGP or CHM or unknown");
      CommandArgument_Bool_OrDefault_Doc(WRITE, True,
           "write output files; not fully respected");
      CommandArgument_String_OrDefault_Doc(READ_SUB, "",
@@ -91,6 +92,13 @@ int main( int argc, char *argv[] )
      CommandArgument_Bool_OrDefault_Doc(REWRITE, False, 
           "special option: read assembly and write more files, "
           "intended for use with Probe");
+     CommandArgument_Int_OrDefault_Doc(NCLONES, -1,
+          "number of clones to use for finished sequence evaluation; "
+          "the default is to use all clones");
+     CommandArgument_Int_OrDefault_Doc(NSEED, 0,
+          "random seed for selection of clones for finished sequence evaluation");
+     CommandArgument_Bool_OrDefault_Doc(EXIT_AFTER_BUILD, False,
+          "Exit after scaffolding");
 
      // EXPERIMENTAL OPTIONS IN PROGRESS.
 
@@ -122,10 +130,13 @@ int main( int argc, char *argv[] )
      Bool JE_STATS            = False;
      String START             = "";
      Bool DEBUG               = False;
+     Bool EXIT_AFTER_BUILD    = False;
      Bool ULTRA               = False;
      Bool GLUE                = False;
      int MAX_GAP              = 100000;
      Bool REWRITE             = False;
+     int NCLONES              = 0;
+     int NSEED                = -1;
      #endif
 
      // These parameters are exposed in the customer pipeline.
@@ -144,6 +155,8 @@ int main( int argc, char *argv[] )
      EndCommandArguments;
 
      if (TRACK_SOME_MEMORY) DeclareThatWeAreTrackingSomeMemory( );
+
+     STRONG_VALIDATE = False;
      
      // Initialize martian alert logger.
      
@@ -151,12 +164,22 @@ int main( int argc, char *argv[] )
      Martian::init(BASE_DIR);
      
      // Initialize StatLogger
+     // NOTE: READ_SUB and WRITE_SUB will not work for some statistics.
+     // To fix do this. TODO
+     // read a.perf_stats file from the correct CP stage and READ_SUB
+     // write a.perf_stats at every CP stage.
+
      String df_stats="", alerts_file="";
      if ( IsRegularFile(DIR + "/a.perf_stats") )
           df_stats=DIR + "/a.perf_stats";
      if ( IsRegularFile(BASE_DIR + "/alerts.list") )
           alerts_file = BASE_DIR + "/alerts.list";
      StatLogger::init( df_stats, alerts_file );
+
+     // Log sample information
+
+     StatLogger::log ( "CS_SAMPLE_ID", CS_SAMPLE_ID, "sample id" );
+     StatLogger::log ( "CS_SAMPLE_DESC", CS_SAMPLE_DESC, "sample description" );
 
      // Log the command that was run.
 
@@ -210,7 +233,6 @@ int main( int argc, char *argv[] )
      vec<pair<String,String>> stagestats;
      stagestats.push( "patch", "histogram_molecules.json" );
      stagestats.push( "patch", "s.lr" );
-     stagestats.push( "fase", "s.hetdist" );
      for ( int i = 0; i < stagestats.isize( ); i++ )
      {    String stage = stagestats[i].first, fn = stagestats[i].second;
           if ( startpos > Position( stagelist, stage ) )
@@ -221,13 +243,6 @@ int main( int argc, char *argv[] )
                     Mkdir777( OUTDIR + "/stats" );
                     Cp2( INDIR + "/stats/" + fn, 
                          OUTDIR + "/stats/" + fn );    }    }    }
-     auto WriteFileStatsInt = [&]( int& x, const String& fn )
-     {    String OUTDIR = DIR + "/" + "final" + WRITE_SUB;
-          Mkdir777(OUTDIR);
-          BinaryWriter::writeFile( OUTDIR + "/stats/" + fn, x );
-          String stats_dir = DIR + "/../stats" + WRITE_SUB;
-          Mkdir777(stats_dir);
-          Cp2( OUTDIR + "/stats/" + fn, stats_dir + "/" + fn );    };
      auto WriteFileStatsVecPairFloatInt = [&]( vec<pair<float, int>>& x, const String& fn )
      {    String OUTDIR = DIR + "/" + "final" + WRITE_SUB;
           Mkdir777(OUTDIR);
@@ -266,12 +281,16 @@ int main( int argc, char *argv[] )
           BinaryReader::readFile( INDIR + "/a.sup", &D );
           BinaryReader::readFile( INDIR + "/a.sup.inv", &dinv );
           BinaryReader::readFile( INDIR + "/a.sup.lines", &dlines );
-          FetchFinished( SAMPLE, G );    
+          FetchFinished( SAMPLE, G, NCLONES, NSEED );    
           int64_t N50_perf = -1;
           double errw = -1;
           if ( G.size( ) > 0 )
           {    MasterVec< SerfVec<triple<int,int,int> > > galignsb;
-               galignsb.ReadAll( DIR + "/a.fin.alignsb" );
+               if ( NCLONES == 0 )
+                    galignsb.ReadAll( DIR + "/a.fin.alignsb" );
+               else
+               {    const int align_genome_K = 60;
+                    GenomeAlign<align_genome_K>( hb, inv, G, galignsb );    }
                vec< vec< vec< triple< vec<int>, align, int > > > > Matches;
                String report;
                AlignFin( hb, inv, D, dinv, dlines, G, galignsb,
@@ -307,7 +326,7 @@ int main( int argc, char *argv[] )
           {    BinaryReader::readFile( DIR + "/a.hbx", &hb );
                if ( !report ) paths.readBinary(DIR + "/a.pathsX");  }
           #pragma omp section
-          if ( SAMPLE != "unknown" ) FetchFinished( SAMPLE, G );
+          if ( SAMPLE != "unknown" ) FetchFinished( SAMPLE, G, NCLONES, NSEED );
           #pragma omp section
           {    if ( !report ) ebcx.ReadAll( DIR + "/a.ebcx" );    }
           #pragma omp section
@@ -316,7 +335,7 @@ int main( int argc, char *argv[] )
      int K = hb.K( );
      vecbasevector genome;
      vec< pair<int,ho_interval> > ambint;
-     if ( SAMPLE == "human" || SAMPLE == "NA12878" || SAMPLE == "HGP" )
+     if ( SAMPLE == "human" || SAMPLE == "NA12878" || SAMPLE == "HGP" || SAMPLE == "CHM" )
      {    genome.ReadAll( "/mnt/opt/meowmix_git/assembly/refs/hg19/genome.fastb" );
           BinaryReader::readFile(
                "/mnt/opt/meowmix_git/assembly/refs/hg19/genome.ambint", 
@@ -333,49 +352,13 @@ int main( int argc, char *argv[] )
           {    int64_t start = bci[b], stop = bci[b+1];
                for ( int64_t j = start; j < stop; j++ )
                     bc[j] = b;    }    }
-     
-     // Compute read two percent proper metric
-     // TODO we should be computing this stat in DF. When we allow
-     // for StatLogger to be written (SELF_SERIALIZABLE) we can move this
-     // computation there. Right now the variable perc_proper_pairs is being
-     // passed to ReportAssemblyStats
 
-     double perc_proper_pairs = -1;
-     {
-          // temporary nonsense until we move things
-          /* VirtualMasterVec<ReadPath> vmv(DIR+"/a.paths"); */
-          // IMPORTANT: this function returns a percentage
-          // not a fraction!!
-          ReadTwoPctProper( hb, inv, paths, perc_proper_pairs );
-          StatLogger::log("proper_pairs_perc", perc_proper_pairs, "% proper pairs", true);
-          StatLogger::issue_alert("proper_pairs_perc", perc_proper_pairs );
-     }
-     
      // Create a vector of integers, one for each read, such that "having two"
      // nonzero elements is enough.  Note nested parallel for loops, not really
      // what we want.
 
-     cout << Date( ) << ": creating bid" << endl;
      if ( START != "report" )
-     {    bid.resize( paths.size( ) );
-          #pragma omp parallel for schedule( dynamic, 1 )
-          for ( int b = 0; b < bci.isize( ) - 1; b++ )
-          {    int64_t start = bci[b], stop = bci[b+1];
-               #pragma omp parallel for
-               for ( int64_t id = start; id < stop; id++ )
-               {    int di;
-                    for ( di = 0; di < datasets.isize( ); di++ )
-                         if ( id < datasets[di].start ) break;
-                    const ReadDataType& dtype = datasets[di-1].dt;
-                    if ( dtype == ReadDataType::BAR_10X )
-                         bid[id] = (int64_t) paths.size( ) + b + 1;
-                    else if ( dtype == ReadDataType::UNBAR_10X ) bid[id] = 0;
-                    else if ( dtype == ReadDataType::PCR_FREE ) bid[id] = id + 1;
-     
-                    // Probably not what we want:
-     
-                    else if ( dtype == ReadDataType::PCR ) 
-                         bid[id] = id + 1;    }    }    }
+          Computebid( datasets, bci, bid );
 
      // Define writing functions.
 
@@ -598,7 +581,7 @@ int main( int argc, char *argv[] )
                     CleanupCore( D, dinv );
                     PlaceReads( hb, paths, dup, D, dpaths, True, single );    }
                String link_report;
-               Scaffold( hb, inv, ebcx, D, dinv, dpaths, bid,
+               ScaffoldLowMem( hb, inv, ebcx, D, dinv, dpaths, bid,
                     datasets, True, link_report, single );
                Ofstream( out, OUTDIR + "/link_report" );
                out << link_report;    }
@@ -610,7 +593,7 @@ int main( int argc, char *argv[] )
           {    IntIndex dpaths_index( dpaths, D.E( ) );
                vec<int> dels;
                const int MAX_CAN_INS_DEL = 4;
-               KillInversionArtifacts( 
+               KillInversionArtifacts( hb,
                     D, dinv, dpaths, dpaths_index, bid, dels, MAX_CAN_INS_DEL );
                D.DeleteEdges(dels);    }
           RemoveUnneededVertices( D, dinv );
@@ -654,6 +637,21 @@ int main( int argc, char *argv[] )
           // PlusWrite( "build" ); // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                }
      Validate( hb, inv, D, dinv );
+     
+     // To exit and run MakeLocals use this option
+
+     if ( EXIT_AFTER_BUILD ) {
+          String OUTDIR = DIR + "/" + "build";
+          PlaceReads( hb, paths, dup, D, dpaths, True, False );
+          cout << Date( ) << ": writing dpaths" << endl;
+          dpaths.WriteAll( OUTDIR + "/a.dpaths" );
+          {    VecULongVec dpaths_index;
+               cout << Date( ) << ": inverting dpaths and writing" << endl;
+               invert( dpaths, dpaths_index, D.E( ) );
+               dpaths_index.WriteAll( OUTDIR + "/a.dpaths.index" );    }
+          StatLogger::write( OUTDIR + "/" + "a.perf_stats" );
+          Scram(0);
+     }
 
      // ============================================================================
 
@@ -817,7 +815,7 @@ int main( int argc, char *argv[] )
                Surgery( hb, inv, D, dinv, dlines, s1s2, closures1, closures2, 
                     closures3, False, False, out );    }
           Zipper( D, dinv );
-          Validate( hb, inv, D, dinv );
+          //Validate( hb, inv, D, dinv );
 
           // Merge some unmerged stuff.  There are uncollapsed long perfect repeats
           // in the assembly at this point.  One solution (below) is to merge them
@@ -848,8 +846,11 @@ int main( int argc, char *argv[] )
                     hb, D, dinv, dels, MAX_KILL, MIN_RATIO, verbose, single );
                IntIndex dpaths_index( dpaths, D.E( ) );
                const int MAX_CAN_INS_DEL = 4;
-               KillInversionArtifacts( 
+               KillInversionArtifacts( hb,
                     D, dinv, dpaths, dpaths_index, bid, dels, MAX_CAN_INS_DEL );    }
+          
+          // Since we don't use this after this point, destroy
+          Destroy( bid );
 
           // Remove compound hangs.
 
@@ -1119,7 +1120,8 @@ int main( int argc, char *argv[] )
           // Running two passes because in the first pass, if there are barcode
           // gaps on the left and the right of an edge, both gaps will not be
           // closed.  We try to avoid duplicating too many calculations.
-
+          
+          {
           vec<vec<int>> D1;
           for ( int pass = 1; pass <= 2; pass++ )
           {    cout << Date( ) << ": start pass " << pass << endl;
@@ -1182,7 +1184,7 @@ int main( int argc, char *argv[] )
                D.DeleteEdges(dels);
                RemoveUnneededVertices( D, dinv );
                CleanupCore( D, dinv );
-               Validate( hb, inv, D, dinv );    }
+               Validate( hb, inv, D, dinv );    }      }// SCOPING to kill D1
 
           // Flatten some bubbles.
 
@@ -1212,8 +1214,9 @@ int main( int argc, char *argv[] )
                Destroy(paths);
                cout << Date() << ": released paths, memory = " <<
                     MemUsageGBString() << endl;
-               BinaryReader::readFile( DIR + "/../closures.fastb", &closures );
-               Splat( hb, inv, closures, D, dinv );
+               vec<vec<int>> cpaths;
+               BinaryReader::readFile( DIR + "/../a.cpaths", &cpaths );
+               Splat( hb, inv, cpaths, D, dinv );
                cout << Date() << ": about to reload paths" << endl;
                double clock = WallClockTime();
                paths.readBinary( DIR+"/a.pathsX" );
@@ -1279,7 +1282,9 @@ int main( int argc, char *argv[] )
           VirtualMasterVec<ReadPath> xpaths( OUTDIR + "/a.xpaths" );
           VirtualMasterVec<ULongVec> xpaths_index( OUTDIR + "/a.xpaths.index" );
           String R, S;
-          Stackaroo( bases, quals, hb, inv, xpaths, xpaths_index, D, dinv, R, S,
+          const int S_MODE=2; // use VirtualMasterVec
+          Stackaroo( bases, quals, hb, inv, xpaths, xpaths_index, S_MODE, 
+               D, dinv, R, S,
                True, False, 0, ddn, False, False, False );
           RemoveDuff2( hb, D, dinv );
           BasicWrite( "fix" );    }
@@ -1367,24 +1372,34 @@ int main( int argc, char *argv[] )
 
           // Fix some inversions.
 
-          {    FindLines( D, dinv, dlines, MAX_CELL_PATHS, MAX_CELL_DEPTH );
-               PlaceReads( hb, paths, dup, D, dpaths, True, False );
-               vec<vec<pair<int,int>>> lbp;
-               {    IntIndex dpaths_index( dpaths, D.E( ) );
-                    BarcodePos( bc, hb, D, dinv, 
-                         dpaths, dpaths_index, dlines, lbp, 0 );    }
+          {
+               cout << Date( ) << ": computing lbpx, mem=" << MemUsageGBString( )
+                    << ", peak=" << PeakMemUsageGBString( ) << endl;
                MasterVec<SerfVec<pair<int,int>>> lbpx;
-               for ( auto x : lbp )
-               {    SerfVec<pair<int,int>> y( x.size( ) );
-                    for ( int j = 0; j < x.isize( ); j++ )
-                         y[j] = x[j];
-                    lbpx.push_back(y);    }
+               {    FindLines( D, dinv, dlines, MAX_CELL_PATHS, MAX_CELL_DEPTH );
+                    PlaceReads( hb, paths, dup, D, dpaths, True, False );
+                    vec<vec<pair<int,int>>> lbp;
+                    {    IntIndex dpaths_index( dpaths, D.E( ) );
+                         BarcodePos( bc, hb, D, dinv, 
+                              dpaths, dpaths_index, dlines, lbp, 0 );    }
+                    Destroy( dpaths );
+                    cout << Date( ) << ": converting lbp, mem=" << MemUsageGBString( )
+                         << ", peak=" << PeakMemUsageGBString( ) << endl;
+                    for ( auto x : lbp )
+                    {    SerfVec<pair<int,int>> y( x.size( ) );
+                         for ( int j = 0; j < x.isize( ); j++ )
+                              y[j] = x[j];
+                         lbpx.push_back(y);    }    }
+               cout << Date( ) << ": done, mem=" << MemUsageGBString( )
+                    << ", peak=" << PeakMemUsageGBString( ) << endl;
                MasterVec<SerfVec<refalign>> galigns;
                if (ALIGN)
                {    MasterVec< SerfVec<triple<int,int,int> > > alignsb;
                     alignsb.ReadAll( DIR + "/a.alignsb" );
                     RefAlign( genome, hb.K( ), hb.Edges( ), inv, D, dinv, dlines, 
                          alignsb, galigns, False, vec<int>( ) );    }
+               cout << Date( ) << ": fixing inversions, mem=" << MemUsageGBString( )
+                    << ", peak=" << PeakMemUsageGBString( ) << endl;
                InvFix( hb, inv, kmers, D, dinv, dlines, lbpx, galigns );    }
 
           // Save.
@@ -1403,22 +1418,38 @@ int main( int argc, char *argv[] )
                vec< vec< pair<int,int> > > lhood;
                LineProx( hb, inv, ebcx, D, dinv, dlines, qept, lhood );
                BinaryWriter::writeFile( OUTDIR + "/a.sup.lhood", lhood );
+               
+               // Edge coverage (needed for het calculation below)
+               // defined here so dpaths can be destroyed
+
+               vec<int> cov( D.E( ), 0 );
                {    PlaceReads( hb, paths, dup, D, dpaths, True, False );
                     dpaths.WriteAll( OUTDIR + "/a.dpaths" ); 
                     {    VecULongVec dpaths_index;
                          invert( dpaths, dpaths_index, D.E( ) );
                          dpaths_index.WriteAll( OUTDIR + "/a.dpaths.index" );    }
-                    IntIndex dpaths_index( dpaths, D.E( ) );
-                    vec<vec<pair<int,int>>> lbp;
-                    BarcodePos( 
-                         bc, hb, D, dinv, dpaths, dpaths_index, dlines, lbp, 0 );
-                    BinaryWriter::writeFile( OUTDIR + "/a.sup.lbp", lbp );
+                    
+                    // Compute edge coverage.
+
+                    for ( auto p : dpaths )
+                    for ( auto d : p ) cov[d]++;
+
                     MasterVec<SerfVec<pair<int,int>>> lbpx;
-                    for ( auto x : lbp )
-                    {    SerfVec<pair<int,int>> y( x.size( ) );
-                         for ( int j = 0; j < x.isize( ); j++ )
-                              y[j] = x[j];
-                         lbpx.push_back(y);    }
+                    {
+                         IntIndex dpaths_index( dpaths, D.E( ) );
+                         vec<vec<pair<int,int>>> lbp;
+                         BarcodePos( 
+                              bc, hb, D, dinv, dpaths, dpaths_index, dlines, lbp, 0 );
+                         BinaryWriter::writeFile( OUTDIR + "/a.sup.lbp", lbp );
+
+                         // Remaining calculations before phasing do not need dpaths
+                         Destroy( dpaths );
+
+                         for ( auto x : lbp )
+                         {    SerfVec<pair<int,int>> y( x.size( ) );
+                              for ( int j = 0; j < x.isize( ); j++ )
+                                   y[j] = x[j];
+                              lbpx.push_back(y);    }    }
                     lbpx.WriteAll( OUTDIR + "/a.sup.lbpx" );
                     vec<int> kmers( hb.E( ) );
                     #pragma omp parallel for
@@ -1456,18 +1487,13 @@ int main( int argc, char *argv[] )
                // NOTE.  This looks for bubbles in the unphased assembly.  We should
                // be restricting attention to bubbles having good coverage on both 
                // branches.
+               // NOTE.  This calculation needs cov, which is computed above
 
                // Heuristics.
 
                const int MIN_LINE = 100000;
                const int MIN_COV = 10;
                const int UNSAMPLE = 100;
-
-               // Compute edge coverage.
-
-               vec<int> cov( D.E( ), 0 );
-               for ( auto p : dpaths )
-               for ( auto d : p ) cov[d]++;
 
                // Now actually estimate heterozygosity rate.
 
@@ -1527,7 +1553,8 @@ int main( int argc, char *argv[] )
                     hetdist = int( round( total_length / (total_snps*UNSAMPLE) ) );
                cout << Date( ) << ": estimated heterozygosity rate = 1 / "
                     << ToStringAddCommas(hetdist) << endl;
-               WriteFileStatsInt( hetdist, "s.hetdist" );    }
+               StatLogger::log( "hetdist", hetdist, 
+               "mean distance between heterozygous SNPs", true );     }
           cout << Date( ) << ": ===== you can now use START=fase ====="
                << endl;    }
 
@@ -1839,41 +1866,53 @@ int main( int argc, char *argv[] )
           SuperFiles( hb, inv, bci, bc, paths, dup, D, dinv, dpaths, 
                dlines, COV, ebcx, qept, genome, alignsb, DIR, WRITE_SUB );    }
 
+     // Destroy data structures that we don't need
+     
+     cout << Date( ) << ": removing data structures, mem=" << MemUsageGBString()
+          << ", peak=" << PeakMemUsageGBString() << endl;
+     Destroy( paths );
+     Destroy( dpaths );
+     Destroy( ebcx );
+     Destroy( qept );
+     Destroy( dup );
+     cout << Date( ) << ": after removal, mem=" << MemUsageGBString()
+          << ", peak=" << PeakMemUsageGBString() << endl;
+
      // Report some stats.
 
      cout << Date( ) << ": reporting assembly stats" << endl;
-     Destroy(paths);
      {    ostringstream xout;
 
-          // Reload dpaths.  This is terrible, just to compute fraction of reads
-          // placed, should have computed this earlier and saved.
-
           String OUTDIR = DIR + "/" + "final" + WRITE_SUB;
-          if ( dpaths.size( ) == 0 ) dpaths.ReadAll( OUTDIR + "/a.dpaths" );
+          Mkdir777(OUTDIR);
 
           // OK now report the stats.
-
-          ReportAssemblyStats( bci, genome, ambint, hb, inv, D, dinv, dlines, dpaths,
-               COV, alignsb, G, perc_proper_pairs, xout, DIR, WRITE_SUB, 
-               CS_SAMPLE_ID, CS_SAMPLE_DESC );
+          // If WRITE_SUB is non-trivial then all the stats will be written to 
+          // DIR + "/" + "final" + WRITE_SUB + "/stats"
+          ReportAssemblyStats( bci, genome, ambint, hb, inv, D, dinv, dlines,
+               alignsb, G, xout, DIR, OUTDIR );
+          
           cout << xout.str( );
-          Mkdir777(OUTDIR);
           Ofstream( yout, OUTDIR + "/stats/summary.txt" );
           yout << xout.str( );    }
+     Destroy(paths);
 
      // Copy over all stats into one place
+     // if WRITE_SUB is non-trivial then the top-level stats dir
+     // will have a WRITE_SUB
 
      String stats_dir = DIR + "/../stats" + WRITE_SUB;
      Mkdir777(stats_dir);
+     
      // q-score histogram
      if ( IsRegularFile( DIR + "/../data/frag_reads_orig.qhist" ) ) // TEMP!
           Cp2( DIR + "/../data/frag_reads_orig.qhist", stats_dir );
+     
      // insert size distribution
      if ( IsRegularFile( DIR + "/a.ins_dist" ) ) // TEMP!
           Cp2( DIR + "/a.ins_dist", stats_dir);
 
-     // all stats 
-     // first copy over histograms
+     // copy over all histograms
      vec<String> histograms ({"contig", "edge", "phase_block", "scaffold", 
           "reads_per_barcode", "molecules"});
      for ( auto & name : histograms ) {
@@ -1881,22 +1920,32 @@ int main( int argc, char *argv[] )
           if ( IsRegularFile ( fn ) )
                Cp2( fn, stats_dir);
      }
+    
+     // Record etime, peak mem
+     double etime_cp = (WallClockTime( ) - clock)/(60.*60.);
+     StatLogger::log( "etime_cp_h", etime_cp, "Elapsed time CP" );
+     StatLogger::log( "mem_peak_cp_gb", PeakMemUsageGB(), "Mem peak CP (gb)" );  
+     
+     // Compute total time in DF/MC/TR/CP
+     double etime_h = 0.0;
+     for ( auto stage : vec<String>({"df", "tr", "mc", "cp"}) )
+          etime_h += StatLogger::getNumStat( "etime_" + stage + "_h" );
+     StatLogger::log( "etime_h", etime_h, "Total elapsed time" );
+     
+     // overwrite files as we logged more info     
+     StatLogger::dump_csv( DIR + "/final" + WRITE_SUB + "/summary_cs.csv" );
+     StatLogger::write( DIR + "/final" + WRITE_SUB + "/a.perf_stats" );
+     StatLogger::dump_json( DIR + "/final" + WRITE_SUB + "/summary.json", True);
+     StatLogger::dump_json( DIR + "/final" + WRITE_SUB + "/all_stats.json");
+
      Cp2( DIR + "/final" + WRITE_SUB + "/all_stats.json", stats_dir);
      Mv( DIR + "/final" + WRITE_SUB + "/summary.json", stats_dir + "/summary.json");         // ligo is saddened by the copy
      Cp2( DIR + "/final" + WRITE_SUB + "/summary_cs.csv", stats_dir);
      Cp2( DIR + "/final" + WRITE_SUB + "/stats/summary.txt", stats_dir);
-     
-     // Record etime, peak mem
-     double etime_cp = (WallClockTime( ) - clock)/(60.*60.);
-     StatLogger::log( "etime_cp_h", etime_cp, "Elapsed time CP" );
-     StatLogger::log( "mem_peak_cp_gb", PeakMemUsageGB(), "Mem peak CP (gb)" );
-     
-     double etime_df = StatLogger::getNumStat("etime_df_h");
-     double etime_h = etime_df + etime_cp;
-     StatLogger::log( "etime_h", etime_h, "DF+CP time" );
 
+     // Write all the stats in txt format
      StatLogger::dump_text( DIR + "/final" + WRITE_SUB + "/stats/statistics.txt");
-     StatLogger::dump_text( DIR + "/../stats/perf.stats" );
+     StatLogger::dump_text( stats_dir + "/perf.stats" );
 
      // Done.
 

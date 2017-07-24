@@ -37,15 +37,24 @@ void ReadPosLine( const vec<int32_t>& bc, const HyperBasevectorX& hb,
      cout << Date( ) << ": defining line buckets a" << endl;
      int nd = dlines.size( );
      vec<int> llensx(llens), ids( nd, vec<int>::IDENTITY );
-     ParallelReverseSortSync( llensx, ids );
+
+     vec<int64_t> xlens( dlines.size( ), 0 );
+     for ( int l = 0; l < dlines.isize( ); l++ )
+     {    const vec<vec<vec<int>>>& L = dlines[l];
+          for ( int i = 0; i < L.isize( ); i++ )
+          for ( int j = 0; j < L[i].isize( ); j++ )
+          for ( int k = 0; k < L[i][j].isize( ); k++ )
+               xlens[l] += dlens[ L[i][j][k] ];    }
+     ParallelReverseSortSync( xlens, ids );
+
      vec<vec<int>> buckets;
      const int bsize = 1000000;
      for ( int i = 0; i < nd; i++ )
-     {    int64_t sum = llensx[i];
+     {    int64_t sum = xlens[i];
           int j;
           for ( j = i + 1; j < nd; j++ )
           {    if ( sum >= bsize ) break;
-               sum += llensx[j];    }
+               sum += xlens[j];    }
           vec<int> b;
           for ( int k = i; k < j; k++ )
                b.push_back( ids[k] );
@@ -133,11 +142,11 @@ void BarcodePos( const vec<int32_t>& bc, const HyperBasevectorX& hb,
      const digraphE<vec<int>>& D, const vec<int>& dinv,
      const ReadPathVec& dpaths, const IntIndex& dpaths_index,
      const vec<vec<vec<vec<int>>>>& dlines, vec<vec<pair<int,int>>>& lbp,
-     const int view )
+     const int view, const Bool verbose )
 {
      // Get superedge lengths.
 
-     cout << Date( ) << ": getting superedge lengths a" << endl;
+     if (verbose) cout << Date( ) << ": getting superedge lengths a" << endl;
      vec<int> dlens( D.E( ), 0 );
      #pragma omp parallel for
      for ( int e = 0; e < D.E( ); e++ )
@@ -150,20 +159,28 @@ void BarcodePos( const vec<int32_t>& bc, const HyperBasevectorX& hb,
      vec<int> llens;
      GetLineLengths( hb, D, dlines, llens );
 
+     vec<int64_t> xlens( dlines.size( ), 0 );
+     for ( int l = 0; l < dlines.isize( ); l++ )
+     {    const vec<vec<vec<int>>>& L = dlines[l];
+          for ( int i = 0; i < L.isize( ); i++ )
+          for ( int j = 0; j < L[i].isize( ); j++ )
+          for ( int k = 0; k < L[i][j].isize( ); k++ )
+               xlens[l] += dlens[ L[i][j][k] ];    }
+
      // Define line buckets.
 
-     cout << Date( ) << ": defining line buckets a" << endl;
+     if (verbose) cout << Date( ) << ": defining line buckets a" << endl;
      int nd = dlines.size( );
      vec<int> llensx(llens), ids( nd, vec<int>::IDENTITY );
-     ParallelReverseSortSync( llensx, ids );
+     ParallelReverseSortSync( xlens, ids );
      vec<vec<int>> buckets;
      const int bsize = 1000000;
      for ( int i = 0; i < nd; i++ )
-     {    int64_t sum = llensx[i];
+     {    int64_t sum = xlens[i];
           int j;
           for ( j = i + 1; j < nd; j++ )
           {    if ( sum >= bsize ) break;
-               sum += llensx[j];    }
+               sum += xlens[j];    }
           vec<int> b;
           for ( int k = i; k < j; k++ )
                b.push_back( ids[k] );
@@ -172,7 +189,7 @@ void BarcodePos( const vec<int32_t>& bc, const HyperBasevectorX& hb,
 
      // Compute barcode positions.
 
-     cout << Date( ) << ": computing barcode positions on lines" << endl;
+     if (verbose) cout << Date( ) << ": computing barcode positions on lines" << endl;
      lbp.clear_and_resize( dlines.size( ) );
      #pragma omp parallel for schedule(dynamic, 1)
      for ( int bi = 0; bi < buckets.isize( ); bi++ )
@@ -303,6 +320,62 @@ double ScoreOrder(
 double ScoreOrder( 
      const vec<int>& L,                    // list of line ids
      VirtualMasterVec<SerfVec<pair<int,int>>> lbpx,  // barcode positions on lines
+     const vec<int>& llens,                // line lengths
+     vec< triple<int,int,int> >& M )       // scratch
+{
+     // Create merged list.
+
+     M.clear( );
+     int pos = 0;
+     for ( int i = 0; i < L.isize( ); i++ )
+     {    int lid = L[i];
+          const SerfVec< pair<int,int> >& x = lbpx[lid];
+          for ( int z = 0; z < (int) x.size( ); z++ )
+               M.push( x[z].first, i, pos + x[z].second );
+          pos += llens[lid];    }
+     Sort(M);
+
+     // Score it.  Removing the top measurement (from one barcode)
+     // does not appear to help.
+
+     double ad = 0.0;
+     vec<int> gaps;
+     for ( int k = 0; k < M.isize( ); k++ )
+     {    
+          // Find one barcode group.
+
+          int l;
+          for ( l = k + 1; l < M.isize( ); l++ )
+               if ( M[l].first != M[k].first ) break;
+
+          // Process group for one barcode.
+
+          double n = l - k - 1;
+          double mean_gap = ( M[l-1].third - M[k].third ) / n;
+          double MIN_ADD = 2.0; // increasing to 4.0 appeared worse
+          for ( int z = k + 1; z < l; z++ )
+          {    if ( M[z].second > M[z-1].second )
+               {    double plus = 
+
+                         // NOT SURE IF WE SHOULD HAVE THIS OR NOT
+                         // Commenting out this line decreased chr error and
+                         // and increased N50 scaffold size, but increased
+                         // ori error.
+                         // ( M[z].second - M[z-1].second ) *
+
+                         double( M[z].third - M[z-1].third ) / mean_gap;
+                    if ( plus >= MIN_ADD ) ad += plus;    }    }
+
+          // Go on to next barcode.
+
+          k = l - 1;    }
+
+     return ad;    }
+
+// DUPLICATES ABOVE:
+double ScoreOrder( 
+     const vec<int>& L,                    // list of line ids
+     MasterVec<SerfVec<pair<int,int>>> lbpx,  // barcode positions on lines
      const vec<int>& llens,                // line lengths
      vec< triple<int,int,int> >& M )       // scratch
 {

@@ -6,5 +6,7 @@ stage ASSEMBLER_PREFLIGHT(
     in map[]  sample_def,
     in string barcode_whitelist,
     in map    downsample,
-    src py     "stages/preflight/denovo",
+    in bool   check_executables,
+    src py    "stages/preflight/denovo",
 )
+

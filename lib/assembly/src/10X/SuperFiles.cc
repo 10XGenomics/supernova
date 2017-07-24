@@ -70,6 +70,16 @@ void SuperFiles( const HyperBasevectorX& hb, const vec<int>& inv,
      PlaceReads( hb, paths, dup, D, dpaths, True, single );
      FindLines( D, dinv, dlines, MAX_CELL_PATHS, MAX_CELL_DEPTH );
      PlaceReadsSmart( hb, paths, dup, D, dinv, dpaths, dlines, bci, False );
+     
+     // Log percent placement after phasing
+
+     int64_t placed = 0;
+     for ( int64_t id = 0; id < (int64_t) dpaths.size( ); id++ )
+          if ( dpaths[id].size( ) > 0 ) placed++;
+     double placed_perc = 100.0*double(placed)/double( dpaths.size());
+     StatLogger::log( "placed_perc", placed_perc,
+          "nonduplicate and phased reads", true );
+
      cout << Date( ) << ": making index" << endl;
      vec<int> mult;
      cout << Date( ) << ": writing scaffolded assembly" << endl;

@@ -11,6 +11,8 @@ import tenkit.seq as tk_seq
 import tenkit.stats as tk_stats
 import tenkit.preflight as tk_preflight
 import tenkit.safe_json
+import tenkit.bam as tk_bam
+from tenkit.constants import BARCODE_LOCATION
 import martian
 import gzip
 import re
@@ -22,9 +24,12 @@ stage SETUP_CHUNKS(
     in  string    input_mode         "configuration of the input fastqs",
     in  string    barcode_whitelist,
     in  map       downsample         "map specifies either subsample_rate (float) or gigabases (int)",
+    out txt       barcode_whitelist_path,
     out map[]     chunks             "map has barcode, barcode_reverse_complement, sample_index, read1, read2, gem_group, and read_group fields",
     out string[]  read_groups        "list of strings representing read groups",
     out json      downsample_info    "info about downsampling"
+    out txt       barcode_whitelist_path,
+    out int       requested_read_pairs,
     src py        "stages/reads/setup_chunks",
 )
 """
@@ -42,24 +47,6 @@ def main(args, outs):
         if not (type(dict_in[name]) in tys):
             martian.exit("Entry %d in sample_def for '%s' has incorrect type -- expecting %s, got %s" % (n, name, str(tys), type(dict_in[name])))
 
-    global_subsample_rate = 1.0
-    downsample_gigabases = False
-    downsample_reads      = False
-    if args.downsample is not None:
-        ## make sure that exactly one downsampling option is specified
-        options_supplied=0
-        for subsample_key in ["gigabases", "subsample_rate", "target_reads"]:
-            if args.downsample.get(subsample_key, None) is not None:
-                options_supplied += 1
-        assert( options_supplied == 1 )
-        ##
-        if 'subsample_rate' in args.downsample and args.downsample['subsample_rate'] is not None:
-            global_subsample_rate = args.downsample['subsample_rate']
-            assert( global_subsample_rate <= 1.0 )
-        elif 'target_reads' in args.downsample and args.downsample['target_reads'] is not None:
-            downsample_reads = True
-        else:
-            downsample_gigabases = True
 
     # Check for self-consistent gem_group settings in the sample_def entries
     gem_groups = [x['gem_group'] for x in args.sample_def]
@@ -76,7 +63,6 @@ def main(args, outs):
 
     # Predicted input bases
     total_seq_bases = 0
-    total_seq_reads = 0
 
     # verify input mode upfront
     if args.input_mode not in ["BCL_PROCESSOR", "ILMN_BCL2FASTQ"]:
@@ -98,11 +84,10 @@ def main(args, outs):
     read_groups = set()
 
     for read_chunk in args.sample_def:
-        # Check if subsample_rate exists in sample_def
-        if 'subsample_rate' in read_chunk.keys():
-            subsample_rate = global_subsample_rate * read_chunk['subsample_rate']
-        else:
-            subsample_rate = global_subsample_rate
+        # Each sample_def entry can have a separate pre-applied downsampling rate
+        # We adjust the estimated data in that chunk to account for this
+        # subsampling
+        chunk_subsample_rate = read_chunk.get('subsample_rate', 1.0)
 
         bc_in_read = {}
         if read_chunk.has_key('bc_in_read'):
@@ -115,7 +100,7 @@ def main(args, outs):
         gem_group = read_chunk['gem_group']
         unbarcoded = read_chunk.get('unbarcoded')
         sample_id = args.sample_id
-        library_id = read_chunk.get('library_id', 'MissingLibrary')
+        library_id = read_chunk.get('library', 'MissingLibrary')
 
         # split on BCL_PROCESSOR / ILMN_BCL2FASTQ
         # the main difference is that BCL_PROCESSOR uses interleaved reads and labels FASTQs by sample index;
@@ -127,19 +112,19 @@ def main(args, outs):
                 martian.exit(msg)
 
             sample_seq_bases = 0
-            sample_seq_reads = 0
             find_func = tk_fasta.find_input_fastq_files_10x_preprocess
             for sample_index in sample_index_strings:
                 # process interleaved reads
                 reads = find_func(path, interleaved_read_type, sample_index, lanes)
                 for read in reads:
-                    predicted_seq_reads, predicted_seq_bases = fastq_data_estimate(read)
+                    _, predicted_seq_bases, read_length = fastq_data_estimate(read)
                     sample_seq_bases += predicted_seq_bases
-                    sample_seq_reads += predicted_seq_reads
 
-            martian.log_info("Input data: Predict %f GB from %s" % (float(sample_seq_bases)/1e9, path))
+            sample_seq_bases = chunk_subsample_rate * sample_seq_bases
+            bp_per_read_pair = 2*read_length
+
+            martian.log_info("Input data: Predict %f GB from %s. (%d bp per read pair)" % (float(sample_seq_bases)/1e9, path, bp_per_read_pair))
             total_seq_bases += sample_seq_bases
-            total_seq_reads += sample_seq_reads
 
             for sample_index in sample_index_strings:
                 reads = find_func(path, interleaved_read_type, sample_index, lanes)
@@ -163,11 +148,11 @@ def main(args, outs):
                 # calculate chunks
                 for r,b,si in zip(reads, barcodes, sis):
                     (flowcell, lane) = get_run_data(r)
-                    rg_string = ':'.join([sample_id, library_id, str(gem_group), flowcell, lane])
+                    rg_string = tk_bam.pack_rg_string(sample_id, library_id, gem_group, flowcell, lane)
                     new_chunk = {
-                        'read1': r, 'read2': None, 'reads_interleaved': True, 'barcode': b, 
+                        'read1': r, 'read2': None, 'reads_interleaved': True, 'barcode': b,
                         'sample_index': si, 'barcode_reverse_complement': False, 'gem_group': gem_group,
-                        'subsample_rate': subsample_rate, 'read_group': rg_string
+                        'subsample_rate': chunk_subsample_rate, 'read_group': rg_string
                     }
                     new_chunk.update(bc_in_read)
                     chunks.append(new_chunk)
@@ -177,25 +162,24 @@ def main(args, outs):
             sample_names = read_chunk['sample_names']
 
             sample_seq_bases = 0
-            sample_seq_reads = 0
             find_func = tk_fasta.find_input_fastq_files_bcl2fastq_demult
             for sample_name in sample_names:
                 # process read 1
                 reads = find_func(path, "R1", sample_name, lanes)
                 for read in reads:
-                    predicted_seq_reads, predicted_seq_bases = fastq_data_estimate(read)
+                    _, predicted_seq_bases, read_length1 = fastq_data_estimate(read)
                     sample_seq_bases += predicted_seq_bases
-                    sample_seq_reads += predicted_seq_reads
                 # process read 2
                 reads = find_func(path, "R2", sample_name, lanes)
                 for read in reads:
-                    predicted_seq_reads, predicted_seq_bases = fastq_data_estimate(read)
+                    _, predicted_seq_bases, read_length2 = fastq_data_estimate(read)
                     sample_seq_bases += predicted_seq_bases
-                    sample_seq_reads += predicted_seq_reads
 
-            martian.log_info("Input data: Predict %f GB from %s" % (float(sample_seq_bases)/1e9, path))
+            sample_seq_bases = chunk_subsample_rate * sample_seq_bases
+            bp_per_read_pair = read_length1 + read_length2
+
+            martian.log_info("Input data: Predict %f GB from %s. (%d bp per read pair)" % (float(sample_seq_bases)/1e9, path, bp_per_read_pair))
             total_seq_bases += sample_seq_bases
-            total_seq_reads += sample_seq_reads
 
             for sample_name in sample_names:
                 r1_reads = find_func(path, "R1", sample_name, lanes)
@@ -230,82 +214,95 @@ def main(args, outs):
                 # calculate chunks
                 for r1,r2,b,si in zip(r1_reads, r2_reads, barcodes, sis):
                     (flowcell, lane) = get_run_data(r1)
-                    rg_string = ':'.join([sample_id, library_id, str(gem_group), flowcell, lane])
+                    rg_string = tk_bam.pack_rg_string(sample_id, library_id, gem_group, flowcell, lane)
                     new_chunk = {
                         'read1': r1, 'read2': r2, 'reads_interleaved': False, 'barcode': b,
                         'sample_index': si, 'barcode_reverse_complement': False, 'gem_group': gem_group,
-                        'subsample_rate': subsample_rate, 'read_group': rg_string
+                        'subsample_rate': chunk_subsample_rate, 'read_group': rg_string
                     }
                     new_chunk.update(bc_in_read)
                     chunks.append(new_chunk)
                     read_groups.add(rg_string)
 
     martian.log_info("Input data: Predict %f total GB" % (float(total_seq_bases)/1e9))
-    martian.log_info("            Predict %d total reads" % total_seq_reads)
 
     if len(chunks) == 0:
         martian.exit("No input FASTQs were found for the requested parameters.")
 
-    if downsample_gigabases and args.downsample['gigabases'] is not None:
-        # Calculate global downsample rate
-        global_subsample_rate = min(1.0, float(args.downsample['gigabases'])*1e9 / float(total_seq_bases))
-        martian.log_info("Input data downsampling: Requested: %.2f GB, Estimated Input: %.2f GB, Downsample Rate: %.3f" \
-         % (float(args.downsample['gigabases']), float(total_seq_bases)/1e9, global_subsample_rate))
 
+    #
+    # Downsampling setup
+    #
+
+    # The total available input raw gigabases of input data (est_gb), and the base pairs per read pair (bp_per_read_pair)
+    # are estimated above.
+    (est_gb, bp_per_read_pair) = (float(total_seq_bases)/1e9, bp_per_read_pair)
+
+    downsample = args.downsample if args.downsample is not None else {}
+
+    # Possible BC subsampling -- try to get the requested amount of data _after_ bc subsampling
+    est_gb_post_bc = est_gb * downsample.get("bc_subsample_rate", 1.0)
+
+    # Aim high to ensure that we won't be left with too few reads
+    fudge_factor = 1.25
+
+    downsample_succeeded = True
+
+    if downsample.has_key("gigabases"):
+        read_sample_rate = min(1.0, fudge_factor * downsample['gigabases'] / est_gb_post_bc)
+        requested_read_pairs = int(1e9 * downsample['gigabases'] / bp_per_read_pair)
+        downsample_succeeded = downsample['gigabases'] > est_gb_post_bc
+
+    elif downsample.has_key("target_reads"):
+        requested_read_pairs = int(downsample['target_reads'] / 2)
+        est_read_pair_post_bc = 1e9 * est_gb_post_bc / bp_per_read_pair
+        read_sample_rate = min(1.0, fudge_factor * requested_read_pairs / est_read_pair_post_bc)
+        downsample_succeeded = requested_read_pairs > est_read_pair_post_bc
+
+    elif downsample.has_key("subsample_rate"):
+        read_sample_rate = min(1.0, downsample["subsample_rate"] / downsample.get("bc_subsample_rate", 1.0))
+        requested_read_pairs = None
+
+    else:
+        read_sample_rate = 1.0
+        requested_read_pairs = None
+
+
+    martian.log_info("Downsampling request: %s" % str(downsample))
+    martian.log_info("Base pairs per read pair: %s" % bp_per_read_pair)
+    martian.log_info("Estimated Input: %.2f GB, Initial Downsample Rate: %.3f. Requested total reads: %s" % (est_gb, read_sample_rate, str(requested_read_pairs)))
+
+    # Copy over the per-chunk subsample rates
+    if read_sample_rate is not None:
         for chunk in chunks:
-            chunk['subsample_rate'] = chunk['subsample_rate'] * global_subsample_rate
-    elif downsample_reads:
-        global_subsample_rate = min(1.0, float(args.downsample['target_reads'])/float(total_seq_reads))
-        martian.log_info("Input data downsampling: Requested: %.2f M reads, Estimated Input: %.2f M reads, Downsample Rate: %.3f" \
-         % (float(args.downsample['target_reads'])/1e6, float(total_seq_reads)/1e6, global_subsample_rate))
+            chunk['subsample_rate'] = chunk.get('subsample_rate', 1.0) * read_sample_rate
+            if downsample.has_key("bc_subsample_rate"):
+                chunk["bc_subsample_rate"] = downsample["bc_subsample_rate"]
 
-        for chunk in chunks:
-            chunk['subsample_rate'] = chunk['subsample_rate'] * global_subsample_rate
-
-
+    outs.requested_read_pairs = requested_read_pairs
 
     martian.log_info("Input reads: %s" % str(chunks))
     outs.chunks = chunks
     outs.read_groups = [rg for rg in read_groups]
 
-    # log info about input vs requested GB
-    # first, set defaults
-    available_gb = float(total_seq_bases)/1e9
-    requested_gb = None
-    available_reads = total_seq_reads
-    requested_reads = None
-    requested_rate = None
-    post_downsample_gb = requested_gb
-    downsample_succeeded = True
-
-    if args.downsample is not None and args.downsample.get('gigabases') is not None:
-        requested_gb = float(args.downsample['gigabases'])
-        post_downsample_gb = min(available_gb, requested_gb)
-        if available_gb < requested_gb:
-            martian.log_info("Downsample requested more GB than was available; will not downsample.")
-            downsample_succeeded = False
-
-    elif args.downsample is not None and args.downsample.get('subsample_rate') is not None:
-        requested_rate = float(args.downsample['subsample_rate'])
-        post_downsample_gb = available_gb * requested_rate
-
-    elif args.downsample is not None and args.downsample.get('target_reads') is not None:
-        requested_reads = float(args.downsample['target_reads'])
-
-
     downsample_info = {}
-    downsample_info['available_gb'] = available_gb
-    downsample_info['requested_gb'] = requested_gb
-    downsample_info['available_reads'] = available_reads
-    downsample_info['requested_reads'] = requested_reads
-    downsample_info['requested_rate'] = requested_rate
-    downsample_info['post_downsample_gb'] = post_downsample_gb
+    downsample_info['available_gb'] = est_gb
+    downsample_info['requested_gb'] = downsample.get('gigabases', None)
+    downsample_info['requested_rate'] = read_sample_rate
+    downsample_info['post_downsample_gb'] = float(requested_read_pairs * bp_per_read_pair) / 1e9 if requested_read_pairs is not None else None
     downsample_info['downsample_succeeded'] = downsample_succeeded
 
     with open(outs.downsample_info, 'w') as downsample_out:
         tenkit.safe_json.dump_numpy(downsample_info, downsample_out)
 
     check_fastqs(outs.chunks)
+
+    # Give out full path to BC whitelist
+    if args.barcode_whitelist:
+        outs.barcode_whitelist_path = BARCODE_LOCATION + "/" + args.barcode_whitelist + ".txt"
+    else:
+        outs.barcode_whitelist_path = None
+
 
 def check_fastqs(chunks):
     keys = ['read1', 'read2', 'barcode', 'sample_index']
@@ -434,12 +431,15 @@ def estimate_gzip_uncompressed_size(fn):
     file_sz = os.path.getsize(fn)
     reader = gzip.open(fn)
 
-    lens = [len(l) for l in itertools.islice(reader, 20000)]
+    # Read through 50k reads or ~4% of the file, whichever is greater, to estimate the compression ratio
+    num_to_read = max(50000, 0.04 * (file_sz * 4 / 200))
+
+    lens = [len(l) for l in itertools.islice(reader, num_to_read)]
     uncompressed_sz = sum(lens)
     compressed_sz = reader.myfileobj.tell()
 
     # Rough guess of the uncompressed size
-    estimated_full_sz = 1.1 * float(uncompressed_sz) / compressed_sz * file_sz
+    estimated_full_sz = 1.01 * float(uncompressed_sz) / compressed_sz * file_sz
     uncompressed_full_sz_mod = parse_gzip_sz(fn)
 
     min_err = 1.0e12
@@ -453,10 +453,10 @@ def estimate_gzip_uncompressed_size(fn):
             true_size = true_size_opt
 
     assert(min_err <= 2**31)
-    return true_size
+    return (true_size, estimated_full_sz)
 
 
-def fastq_data_estimate(fn, num_reads = 8000):
+def fastq_data_estimate(fn, num_reads = 5000):
     # Open reader
     if fn[-2:] == 'gz':
         reader = gzip.open(fn)
@@ -473,34 +473,36 @@ def fastq_data_estimate(fn, num_reads = 8000):
     total_data_len = sum(x[0] for x in input_lens)
     file_sz = os.path.getsize(fn)
 
+    read_length = total_seq_len / len(input_lens)
+
     if is_gz:
-        #file_len = reader.myfileobj.tell()
-        uncomp_size = estimate_gzip_uncompressed_size(fn) * 0.8        # STUPID FUDGE FACTOR TO GET >= REQUESTED AMT
+        (uncomp_size, predicted_sz) = estimate_gzip_uncompressed_size(fn)
     else:
-        #file_len = data_len
         uncomp_size = file_sz
+        predicted_sz = file_sz
 
     read_yield = float(len(input_lens)) / total_data_len
     seq_yield = float(total_seq_len) / total_data_len
     predicted_reads = read_yield * uncomp_size
     predicted_seq = seq_yield * uncomp_size
 
-    # For debugging
-    #predicted_sz = float(total_data_len) / file_len * file_sz
-    #gzip_sz = parse_gzip_sz(fn)
-    #print "comp: %.2f, pred: %.2f, pred_mod2: %.2f, gzip_mod2: %.2f, gzip_est: %.2f" % (float(file_sz)/1e9, float(predicted_sz)/1e9, float(predicted_sz % 2**32)/1e9, float(gzip_sz)/1e9, float(uncomp_gzip_est2)/1e9)
+    # Log estimate of downsampling
+    gzip_sz = parse_gzip_sz(fn)
+    martian.log_info("Estimates for: %s" % fn)
+    dbg_str =  "compressed_size: %.2f, predicted_size: %.2f, predicted_size_mod: %.2f, gzip_size_mod: %.2f, gzip_predicted_size: %.2f" % (float(file_sz)/1e9, float(predicted_sz)/1e9, float(predicted_sz % 2**32)/1e9, float(gzip_sz)/1e9, float(uncomp_size)/1e9)
+    martian.log_info(dbg_str)
 
-    return (predicted_reads, predicted_seq)
+    return (predicted_reads, predicted_seq, read_length)
 
 def get_run_data(fn):
-    """ Parse flowcell + lane from the first FASTQ record. 
+    """ Parse flowcell + lane from the first FASTQ record.
     NOTE: we don't check whether there are multiple FC / lanes in this file.
     """
     if fn[-2:] == 'gz':
         reader = gzip.open(fn)
     else:
         reader = open(fn, 'r')
-        
+
     gen = tk_fasta.read_generator_fastq(reader)
 
     try:

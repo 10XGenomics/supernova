@@ -1,0 +1,13 @@
+[package]
+name = "shardio"
+version = "0.1.0"
+authors = ["Patrick Marks <patrick@10xgenomics.com>"]
+
+[dependencies]
+rustc-serialize = "*"
+byteorder = "*"
+libc = "*"
+bincode = "*"
+
+[dev-dependencies]
+tempfile = "*"

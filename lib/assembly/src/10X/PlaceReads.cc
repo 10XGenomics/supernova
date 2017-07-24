@@ -13,6 +13,9 @@
 #include "paths/long/large/Lines.h"
 #include "10X/DfTools.h"
 #include "10X/PlaceReads.h"
+#include "ParallelVecUtilities.h"
+#include "10X/CleanThe.h"
+
 
 // Align a path to the supergraph.
 
@@ -72,6 +75,7 @@ void Align(
                dstart = D.O(dn).isize( ) - 1;    }    }
      d.ReverseMe( );    }
 
+// !!! THIS VERSION IS ACTUALLY BUGGY!
 // Align2: this version more correctly handles duplicate branches, as would arise
 // in case zippering was incomplete.  Probably this should supplant Align at some
 // point.
@@ -87,6 +91,50 @@ void Align2(
      int& dstop                   // index+1 of stop edge on last edge in d
           )
 {    
+     // Sanity check D, to_left and to_right.  
+     // Commented out because insanely expensive.
+
+     /*
+     #ifndef NDEBUG
+     {    vec<int> to_leftx, to_rightx;
+          D.ToLeft(to_leftx), D.ToRight(to_rightx);
+          Assert( to_left == to_leftx );
+          Assert( to_right == to_rightx );
+          for ( int f = 0; f < D.E( ); f++ ) Assert( D.O(f).size( ) > 0 );    }
+     #endif
+     */
+
+     // Sanity check the rest of the input data.
+     // Commented out because not sufficiently tested, but probably correct.
+
+     /*
+     AssertGt( x.isize( ), 0 );
+     AssertGt( d.isize( ), 0 );
+     AssertGe( dstart, 0 );
+     AssertGt( dstop, 0 );
+     AssertLe( dstop, D.O( d.back( ) ).isize( ) );
+     AssertGe( xpos.Start( ), 0 );
+     AssertLe( xpos.Stop( ), x.isize( ) );
+     #ifndef NDEBUG
+     {    for ( int i = 0; i < d.isize( ) - 1; i++ )
+               AssertEq( to_right[ d[i] ], to_left[ d[i+1] ] );
+          if ( d.solo( ) )
+          {    AssertLt( dstart, dstop );    }
+          vec<int> z1, z2;
+          for ( int j = xpos.Start( ); j < xpos.Stop( ); j++ ) z1.push_back( x[j] );
+          if ( d.solo( ) )
+          {    for ( int j = dstart; j < dstop; j++ )
+                    z2.push_back( D.O( d[0] )[j] );    }
+          else
+          {    for ( int j = dstart; j < D.O(d[0]).isize( ); j++ )
+                    z2.push_back( D.O( d.front( ) )[j] );
+               for ( int j = 1; j < d.isize( ) - 1; j++ ) z2.append( D.O(d[j]) );
+               for ( int j = 0; j < dstop; j++ )
+                    z2.push_back( D.O( d.back( ) )[j] );    }
+          Assert( z1 == z2 );    }
+     #endif
+     */
+
      // Extend right.
 
      while(1)
@@ -111,7 +159,8 @@ void Align2(
                     d.push_back(dn);
                     dstop = 1;    }
                else
-               {    vec<vec<int>> exts;
+               {    
+                    vec<vec<int>> exts;
                     for ( int j = 0; j < D.From(v).isize( ); j++ )
                     {    int n = D.IFrom( v, j );
                          if ( D.O(n)[0] < 0 ) continue;
@@ -132,7 +181,8 @@ void Align2(
                                    if ( t.isize( ) == len ) break;    }
                               if ( t.isize( ) == len ) break;    }
                          Bool ok = True;
-                         for ( int l = 0; l < len; l++ )
+                         if ( t.isize( ) < len ) ok = False;
+                         for ( int l = 0; l < t.isize( ); l++ )
                          {    if ( t[l] != x[ xpos.Stop( ) + l ] )
                               {    ok = False;
                                    break;    }    }
@@ -188,7 +238,8 @@ void Align2(
                                    if ( t.isize( ) == len ) break;    }
                               if ( t.isize( ) == len ) break;    }
                          Bool ok = True;
-                         for ( int l = 0; l < len; l++ )
+                         if ( t.isize( ) < len ) ok = False;
+                         for ( int l = 0; l < t.isize( ); l++ )
                          {    if ( t[l] != x[ xpos.Start( ) - l - 1 ] )
                               {    ok = False;
                                    break;    }    }
@@ -200,38 +251,375 @@ void Align2(
                     dstart = D.O(n).isize( ) - 1;    }    }    }
      d.ReverseMe( );    }
 
-void PlaceReads( const HyperBasevectorX& hb, const ReadPathVec& paths, 
+void ExtendRight(const digraphE<vec<int>>& D, int w, int edge, const vec<int>& x, ho_interval xpos, int dseed,
+        vec<int>& sofar, vec<triple<int,vec<int>,ho_interval>>& hit){ 
+     // artifical brakes
+     if(hit.size()>20) return;
+
+     int len = x.isize() - xpos.Stop(); 
+     int seeklen = Min(D.O(edge).isize()-dseed,len);         
+     Bool ok = True;
+     int l = 0;
+     for(l = 0; l < seeklen; l++){
+         if(x[xpos.Stop()+l]!=D.O(edge)[dseed+l]){
+             ok = False;
+             break;
+         }
+     }
+     dseed += l;
+     sofar.push_back(edge);
+     xpos.AddToStop(l);
+
+     if(!ok || xpos.Stop()==x.isize()){
+         hit.push(dseed,sofar,xpos);
+         sofar.resize(sofar.size()-1);
+         return;
+     }
+    
+     int ext = 0;
+     for(int k = 0; k < D.From(w).isize(); k++){
+         if(D.O(D.IFrom(w,k))[0]<0) continue;
+         if(x[xpos.Stop()]==D.O(D.IFrom(w,k))[0]){
+             ext++;
+             ExtendRight(D, D.From(w)[k],D.IFrom(w,k),x,xpos,0,sofar,hit);
+         }
+     }
+     if(ext==0)
+         hit.push(dseed,sofar,xpos);
+     sofar.resize(sofar.size()-1);
+}
+
+void ExtendLeft(const digraphE<vec<int>>& D, int v, int edge, const vec<int>& x, ho_interval xpos, int dseed,
+        vec<int>& sofar, vec<triple<int,vec<int>,ho_interval>>& hit){ 
+     // artifical brakes
+     if(hit.size()>20) return;
+
+     int len = xpos.Start(); 
+     int seeklen = Min(dseed,len);         
+     Bool ok = True;
+     int l = 0;
+     for(l = 0; l < seeklen; l++){
+         if(x[xpos.Start()-l-1]!=D.O(edge)[dseed-l-1]){
+             ok = False;
+             break;
+         }
+     }
+     dseed -= l;
+     sofar.push_back(edge);
+     xpos.SubFromStart(l);
+
+     if(!ok || xpos.Start()==0){
+         hit.push(dseed,sofar,xpos);
+         sofar.resize(sofar.size()-1);
+         return;
+     }
+
+     int ext = 0;
+     for(int k = 0; k < D.To(v).isize(); k++){
+         if(D.O(D.ITo(v,k))[0]<0) continue;
+         if(x[xpos.Start()-1]==D.O(D.ITo(v,k)).back()){
+             ext++;
+             ExtendLeft(D, D.To(v)[k],D.ITo(v,k),x,xpos,D.O(D.ITo(v,k)).size(),sofar,hit);
+         }
+     }
+     if(ext==0)
+         hit.push(dseed,sofar,xpos);
+     sofar.resize(sofar.size()-1);
+}
+
+// This version handles unzippered vertices carefully. It first creates path extension to left and right
+// from a seed edge. Then it picks the maximum length unambiguous path in either direction and 
+// joins them at the seed to form the final path
+void Align2_new( 
+     const digraphE<vec<int>>& D, // supergraph
+     const vec<int>& to_left,     // edge to left
+     const vec<int>& to_right,    // edge to right
+     const vec<int>& x,           // input path
+     ho_interval& xpos,           // aligned start/stop positions on x
+     vec<int>& d,                 // path in D
+     int& dstart,                 // index of start edge on first edge in d
+     int& dstop                   // index+1 of stop edge on last edge in d
+          )
+{    
+     // process hits
+     vec<triple<int,vec<int>,ho_interval>> hitR, hitL;
+     triple<int,vec<int>,ho_interval> qL, qR;
+     vec<int> sofar;
+     int edge = d.back();
+     int w = to_right[edge];
+     int v = to_left[edge];
+
+     ExtendRight(D, w, edge, x, xpos, dstop, sofar, hitR);
+     ForceAssertEq(sofar.size(),0);
+     ExtendLeft(D, v, edge, x, xpos, dstart, sofar, hitL);
+     ForceAssertEq(sofar.size(),0);
+
+     /* for(auto h : hitL) */
+     /*     cout << h.first << " : " << printSeq(h.second) << " : " << h.third.Start() << " " << h.third.Stop() << endl; */
+     /* cout << " -- " << endl; */
+     /* for(auto h : hitR) */
+     /*     cout << h.first << " : " << printSeq(h.second) << " : " << h.third.Start() << " " << h.third.Stop() << endl; */
+     /* cout << endl; */
+
+     vec<int> mR,mL;
+     vec<Bool> delR(hitR.size(),False),delL(hitL.size(),False);
+     int idx;
+
+     for(auto& h : hitR)
+         mR.push_back(h.third.Stop());
+     SortSync(mR,hitR);
+     idx = 0;
+     while(mR.size()>1 && idx+1 < mR.isize()){
+        if(mR[idx]==mR[idx+1]){
+            delR[idx] = True;
+            delR[idx+1] = True;
+        }
+        idx++;
+     }
+     auto keepR = hitR;
+     auto kR = mR;
+     EraseIf(keepR,delR);
+     EraseIf(kR,delR);
+
+     for(auto& h : hitL)
+         mL.push_back(h.third.Start());
+     ReverseSortSync(mL,hitL);
+     idx = 0;
+     while(mL.size()>1 && idx+1 < mL.isize()){
+        if(mL[idx]==mL[idx+1]){
+            delL[idx] = True;
+            delL[idx+1] = True;
+        }
+        idx++;
+     }
+     auto keepL = hitL;
+     auto kL = mL;
+     EraseIf(keepL,delL);
+     EraseIf(kL,delL);
+
+     // if no single path, trim to basic
+     if(kR.size()==0){
+         qR = hitR[0];
+         qR.second.resize(1);
+         xpos.AddToStop( D.O(qR.second.back()).isize()-dstop );
+         dstop = D.O(qR.second.back()).isize();
+     }else{
+         qR = keepR.back(); // max stop
+         xpos.SetStop( qR.third.Stop() );
+         dstop = qR.first;
+     }
+
+     // if no single path, trim to basic
+     if(kL.size()==0){
+         qL = hitL[0];
+         qL.second.resize(1);
+         xpos.SubFromStart( dstart );
+         dstart = 0;
+     }else{
+         qL = keepL.back();
+         xpos.SetStart( qL.third.Start() );
+         dstart = qL.first;
+     }
+       
+     // sanity
+     ForceAssertGe(qL.second.size(),1);
+     ForceAssertGe(qR.second.size(),1);
+     ForceAssertEq(qL.third.Stop(),qR.third.Start()+1);
+
+     // build d
+     d = qL.second;
+     d.ReverseMe();
+     d.insert(d.end(),qR.second.begin()+1,qR.second.end());
+
+     /* cout << "d " << printSeq(d) << " dstart "  << dstart << " dstop " << dstop << " xpos " << xpos.Start() << " " << xpos.Stop() << " : " << x.isize() << endl; */
+
+}
+
+// This is the correct version of FindPlaces that should be used. It uses all min mult edges as seeds.
+Bool FindPlacesAlt( const ReadPath& p, vec<int>& d, vec<int>& x, 
+     const HyperBasevectorX& hb, const digraphE<vec<int>>& D, const vec<int>& dlens,
+     const vec<int>& to_left, const vec<int>& to_right,
+     const vec<vec<pair<int,int>>>& nd, const Bool align2,
+     int& nplaces, int& pos, vec<int>& aplace )
+{
+     // Empty path?
+     if ( p.size( ) == 0 ) return False;
+
+     // Find minimum multiplicity edge in p.
+     int m = 1000000000, mpe = -1;
+     for ( int j = 0; j < (int) p.size( ); j++ )
+     {    int n = nd[ p[j] ].size( );
+          if ( n == 0 ) continue;
+          if ( n < m )
+          {    m = n;
+               mpe = j;    }    }
+
+     // Find all min mult edges
+     vec<int> minE;
+     for( int j = 0; j < (int) p.size( ); j++)
+         if(m==nd[p[j]].isize( ))
+             minE.push(j);
+
+
+     // Test placements.
+     nplaces = 0, pos = -1;
+     vec<triple<ho_interval,vec<int>,int>> accepted;
+     for(auto mp : minE){
+         if ( mp < 0 || nd[ p[mp] ].empty( ) ) return False; // pathological case not gonna happen
+         for ( int i = 0; i < nd[ p[mp] ].isize( ); i++ )
+         {    int e = nd[ p[mp] ][i].first, epos = nd[ p[mp] ][i].second;
+              x.clear( );
+              for ( int j = 0; j < (int) p.size( ); j++ ) x.push_back( p[j] );
+              ho_interval xpos( mp, mp+1 );
+              d = {e};
+              int dstart = epos, dstop = epos + 1;
+              ( !align2 ? Align : Align2 )(
+                   D, to_left, to_right, x, xpos, d, dstart, dstop );
+
+              // For now, toss improper alignments.
+              if ( xpos.Start( ) > 0 )
+              {    if ( dstart > 0 ) continue;
+                   if ( dstart == 0 )
+                   {    int v = to_left[ d.front( ) ];
+                        if ( D.To(v).nonempty( ) ) continue;    }    }
+              if ( xpos.Stop( ) < x.isize( ) )
+              {    if ( dstop < D.O( d.back( ) ).isize( ) ) continue;
+                   int w = to_right[ d.back( ) ];
+                   if ( D.From(w).nonempty( ) ) continue;    }
+
+              // Compute start position of read on d[0].
+              pos = p.getOffset( );
+              for ( int j = 0; j < dstart; j++ )
+                   pos += hb.Kmers( D.O(d[0])[j] );
+
+              // Save 
+              accepted.push(xpos,d,pos);
+         }
+     }
+
+     if(accepted.size()==0)
+         return False;
+
+     // mix of full and improper placements
+     ParallelUniqueSort(accepted);
+     vec<int> klen(accepted.size(),0);
+     for(int j = 0; j < accepted.isize(); j++){
+         auto xpos1 = accepted[j].first;
+         for(int kk = xpos1.Start(); kk < xpos1.Stop(); kk++)
+             klen[j] += hb.Kmers(x[kk]);
+     }
+     ReverseSortSync(klen,accepted);
+
+     // if largest placement is not unique (be it proper or improper), return false;
+     if(klen.size()>1)
+         if(klen[0]==klen[1])
+             return False;
+
+     d = accepted[0].second;
+     pos = accepted[0].third;
+     nplaces = 1;
+     aplace.clear( );
+     for ( int j = 0; j < d.isize( ); j++ ) aplace.push_back( d[j] );    
+
+     // Check for broken placement.  Need to track down how this could ever happen.
+     int n = hb.K( ) - 1;
+     for ( auto f : aplace ) n += dlens[f];
+     if ( pos > n ) return False;
+     return True;    }
+
+Bool FindPlaces( const ReadPath& p, vec<int>& d, vec<int>& x, 
+     const HyperBasevectorX& hb, const digraphE<vec<int>>& D, const vec<int>& dlens,
+     const vec<int>& to_left, const vec<int>& to_right,
+     const vec<vec<pair<int,int>>>& nd, const Bool align2,
+     int& nplaces, int& pos, vec<int>& aplace )
+{
+     // Empty path?
+
+     if ( p.size( ) == 0 ) return False;
+
+     // Find minimum multiplicity edge in p.
+
+     int m = 1000000000, mp = -1;
+     for ( int j = 0; j < (int) p.size( ); j++ )
+     {    int n = nd[ p[j] ].size( );
+          if ( n == 0 ) continue;
+          if ( n < m )
+          {    m = n;
+               mp = j;    }    }
+
+     // Test placements.
+
+     if ( mp < 0 || nd[ p[mp] ].empty( ) ) return False;
+     nplaces = 0, pos = -1;
+     for ( int i = 0; i < nd[ p[mp] ].isize( ); i++ )
+     {    int e = nd[ p[mp] ][i].first, epos = nd[ p[mp] ][i].second;
+          x.clear( );
+          for ( int j = 0; j < (int) p.size( ); j++ ) x.push_back( p[j] );
+          ho_interval xpos( mp, mp+1 );
+          d = {e};
+          int dstart = epos, dstop = epos + 1;
+          ( !align2 ? Align : Align2 )(
+               D, to_left, to_right, x, xpos, d, dstart, dstop );
+
+          // For now, toss improper alignments.
+
+          if ( xpos.Start( ) > 0 )
+          {    if ( dstart > 0 ) continue;
+               if ( dstart == 0 )
+               {    int v = to_left[ d.front( ) ];
+                    if ( D.To(v).nonempty( ) ) continue;    }    }
+          if ( xpos.Stop( ) < x.isize( ) )
+          {    if ( dstop < D.O( d.back( ) ).isize( ) ) continue;
+               int w = to_right[ d.back( ) ];
+               if ( D.From(w).nonempty( ) ) continue;    }
+
+          // Compute start position of read on d[0].
+
+          pos = p.getOffset( );
+          for ( int j = 0; j < dstart; j++ )
+               pos += hb.Kmers( D.O(d[0])[j] );
+
+          // Give up if more than one placement.
+
+          nplaces++;
+          if ( nplaces > 1 ) break;
+
+          // Save.  Just saving d, but could save ( xpos, d, dstart, dstop ).
+
+          aplace.clear( );
+          for ( int j = 0; j < d.isize( ); j++ ) aplace.push_back( d[j] );    }
+
+     // For now require that there is a unique proper placement.
+
+     if ( nplaces != 1 ) return False;
+
+     // Check for broken placement.  Need to track down how this could ever happen.
+
+     int n = hb.K( ) - 1;
+     for ( auto f : aplace ) n += dlens[f];
+     if ( pos > n ) return False;
+     return True;    }
+
+void PlaceReadsAlt( const HyperBasevectorX& hb, const ReadPathVec& paths, 
      const vec<Bool>& dup, const digraphE<vec<int>>& D, ReadPathVec& dpaths,
      const Bool verbose, const Bool single, const Bool align2 )
 {
      // Compute dlens.  This is only used in the sanity check below.  It would be
-     // good to eliminate this calculation if possible.
+     // good to eliminate this calculation if possible.  Then index D.
 
-     vec<int> dlens( D.E( ), 0 );
-     #pragma omp parallel for
-     for ( int e = 0; e < D.E( ); e++ )
-     {    if ( D.O(e)[0] < 0 ) continue;
-          for ( int j = 0; j < D.O(e).isize( ); j++ )
-               dlens[e] += hb.Kmers( D.O(e)[j] );    }
-
-     // Index D.
-
-     if (verbose) cout << Date( ) << ": creating index for read placement" << endl;
-     vec<Bool> used;
-     D.Used(used);
-     vec<vec<pair<int,int>>> nd( hb.E( ) );
-     for ( int e = 0; e < D.E( ); e++ )
-     {    if ( !used[e] ) continue;
-          const vec<int>& x = D.O(e);
-          if ( x[0] < 0 ) continue;
-          for ( int j = 0; j < x.isize( ); j++ )
-               nd[ x[j] ].push( e, j );    }
+     vec<int> dlens;
+     ComputeDlens( hb, D, dlens );
+     vec<vec<pair<int,int>>> nd;
+     MakeIndex( hb, D, nd, verbose );
 
      // Build paths.
 
      if ( dpaths.size( ) == 0 )
      {    if (verbose) cout << Date( ) << ": defining data structure" << endl;
           dpaths = paths;    } // TERRIBLE WAY TO RESERVE SPACE!!!!!!!!!!!!!!!!
+     else {
+         dpaths.resize(paths.size());
+     }
      if (verbose) cout << Date( ) << ": creating to_left and to_right" << endl;
      vec<int> to_left, to_right;
      D.ToLeft(to_left), D.ToRight(to_right);
@@ -239,7 +627,7 @@ void PlaceReads( const HyperBasevectorX& hb, const ReadPathVec& paths,
      double clock = WallClockTime( );
      const int batch = 100000;
      int nthreads = ( single ? 1 : omp_get_max_threads( ) );
-     #pragma omp parallel for num_threads(nthreads)
+     #pragma omp parallel for num_threads(nthreads) schedule(dynamic,1)
      for ( int64_t bi = 0; bi < (int64_t) paths.size( ); bi += batch )
      {    vec<int> aplace, d, x;
           for ( int64_t id = bi; 
@@ -247,81 +635,205 @@ void PlaceReads( const HyperBasevectorX& hb, const ReadPathVec& paths,
           {    dpaths[id].resize(0); 
                if ( dup[id/2] ) continue;
                const ReadPath &p = paths[id]; 
-               if ( p.size( ) == 0 ) continue;
-
-               // Find minimum multiplicity edge in p.
-
-               int m = 1000000000, mp = -1;
-               for ( int j = 0; j < (int) p.size( ); j++ )
-               {    int n = nd[ p[j] ].size( );
-                    if ( n == 0 ) continue;
-                    if ( n < m )
-                    {    m = n;
-                         mp = j;    }    }
-
-               // Test placements.
-
-               if ( mp < 0 || nd[ p[mp] ].empty( ) ) continue;
-               int nplaces = 0, pos = -1;
-               for ( int i = 0; i < nd[ p[mp] ].isize( ); i++ )
-               {    int e = nd[ p[mp] ][i].first, epos = nd[ p[mp] ][i].second;
-                    x.clear( );
-                    for ( int j = 0; j < (int) p.size( ); j++ )
-                         x.push_back( p[j] );
-                    ho_interval xpos( mp, mp+1 );
-                    d = {e};
-                    int dstart = epos, dstop = epos + 1;
-                    ( !align2 ? Align : Align2 )( 
-                         D, to_left, to_right, x, xpos, d, dstart, dstop );
-     
-                    // For now, toss improper alignments.
-
-                    if ( xpos.Start( ) > 0 )
-                    {    if ( dstart > 0 ) continue;
-                         if ( dstart == 0 )
-                         {    int v = to_left[ d.front( ) ];
-                              if ( D.To(v).nonempty( ) ) continue;    }    }
-                    if ( xpos.Stop( ) < x.isize( ) ) 
-                    {    if ( dstop < D.O( d.back( ) ).isize( ) ) continue;
-                         int w = to_right[ d.back( ) ];
-                         if ( D.From(w).nonempty( ) ) continue;    }
-
-                    // Compute start position of read on d[0].
-
-                    pos = p.getOffset( );
-                    for ( int j = 0; j < dstart; j++ )
-                         pos += hb.Kmers( D.O(d[0])[j] );
-
-                    // Give up if more than one placement.
-
-                    nplaces++;
-                    if ( nplaces > 1 ) break;
-
-                    // Save.  
-                    // Just saving d, but could save ( xpos, d, dstart, dstop ).
-
-                    aplace.clear( );
-                    for ( int j = 0; j < d.isize( ); j++ )
-                         aplace.push_back( d[j] );    }
-
-               // For now require that there is a unique proper placement.
-
-               if ( nplaces != 1 ) continue;
-
-               // Check for broken placement.  Need to track down how this could
-               // ever happen.
-
-               int n = hb.K( ) - 1;
-               for ( auto f : aplace ) n += dlens[f];
-               if ( pos > n ) continue;
-
-               // Save placement.
-
+               int nplaces, pos;
+               if ( !FindPlacesAlt( p, d, x, hb, D, dlens, to_left, to_right, 
+                    nd, align2, nplaces, pos, aplace ) )
+               {    continue;    }
                dpaths[id].resize( aplace.size( ) );
                for ( int j = 0; j < aplace.isize( ); j++ )
                     dpaths[id][j] = aplace[j];
                dpaths[id].setOffset(pos);    }     }
+     if (verbose) cout << Date( ) << ": done, used " << TimeSince(clock) << endl;
+     int64_t placed = 0;
+     for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
+          if ( dpaths[id].size( ) > 0 ) placed++;
+     if (verbose)
+     {    cout << Date( ) << ": " 
+               << PERCENT_RATIO( 3, placed, (int64_t) paths.size( ) ) 
+               << " placed" << endl;    }    }
 
+void ComputeDlens( const HyperBasevectorX& hb, const digraphE<vec<int>>& D,
+     vec<int>& dlens )
+{    dlens.resize_and_set( D.E( ), 0 );
+     #pragma omp parallel for
+     for ( int e = 0; e < D.E( ); e++ )
+     {    if ( D.O(e)[0] < 0 ) continue;
+          for ( int j = 0; j < D.O(e).isize( ); j++ )
+               dlens[e] += hb.Kmers( D.O(e)[j] );    }    }
+
+void MakeIndex( const HyperBasevectorX& hb, const digraphE<vec<int>>& D,
+     vec<vec<pair<int,int>>>& nd, const Bool verbose )
+{    if (verbose) cout << Date( ) << ": creating index for read placement" << endl;
+     vec<Bool> used;
+     D.Used(used);
+     nd.clear_and_resize( hb.E( ) );
+     for ( int e = 0; e < D.E( ); e++ )
+     {    if ( !used[e] ) continue;
+          const vec<int>& x = D.O(e);
+          if ( x[0] < 0 ) continue;
+          for ( int j = 0; j < x.isize( ); j++ )
+               nd[ x[j] ].push( e, j );    }    }
+
+void PlaceReads2( const HyperBasevectorX& hb, const ReadPathVec& paths, 
+     vec<int64_t>& maprr, const vec<Bool>& dup, const digraphE<vec<int>>& D, 
+     MasterVec<IntVec>& dpaths, int rd_set,
+     const Bool verbose, const Bool single, const Bool align2 )
+{
+     // Compute dlens.  This is only used in the sanity check below.  It would be
+     // good to eliminate this calculation if possible.  Then index D.
+
+     vec<int> dlens;
+     ComputeDlens( hb, D, dlens );
+     vec<vec<pair<int,int>>> nd;
+     MakeIndex( hb, D, nd, verbose );
+
+     // Build paths.
+
+     if ( dpaths.size( ) == 0 )
+     {    if (verbose) cout << Date( ) << ": defining data structure" << endl;
+          dpaths.resize(rd_set);    }
+     if (verbose) cout << Date( ) << ": creating to_left and to_right" << endl;
+     vec<int> to_left, to_right;
+     D.ToLeft(to_left), D.ToRight(to_right);
+     if (verbose) cout << Date( ) << ": looking at reads" << endl;
+     double clock = WallClockTime( );
+     const int batch = 100000;
+     int nthreads = ( single ? 1 : omp_get_max_threads( ) );
+     #pragma omp parallel for num_threads(nthreads) schedule(dynamic,1)
+     for ( int64_t bi = 0; bi < (int64_t) paths.size( ); bi += batch )
+     {    vec<int> aplace, d, x;
+          for ( int64_t id = bi;
+               id < Min( bi + batch, (int64_t) paths.size( ) ); id++ )
+          {    dpaths[maprr[id]].resize(0);
+               if ( dup[id/2] ) continue;
+               const ReadPath &p = paths[id];
+               int nplaces, pos;
+               if ( !FindPlaces( p, d, x, hb, D, dlens, to_left, to_right, 
+                    nd, align2, nplaces, pos, aplace ) )
+               {    continue;    }
+               dpaths[maprr[id]].resize( aplace.size( ) );
+               for ( int j = 0; j < aplace.isize( ); j++ )
+                    dpaths[maprr[id]][j] = aplace[j]; }     }
+
+     if (verbose) cout << Date( ) << ": done, used " << TimeSince(clock) << endl;
+     int64_t placed = 0;
+     for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
+          if ( dpaths[maprr[id]].size( ) > 0 ) placed++;
+     if (verbose)
+     {    cout << Date( ) << ": " 
+               << PERCENT_RATIO( 3, placed, (int64_t) paths.size( ) ) 
+               << " placed" << endl;    }    }
+
+void PlaceReads2( const HyperBasevectorX& hb, const ReadPathVecX& paths, 
+     vec<int64_t>& maprr, const vec<Bool>& dup, const digraphE<vec<int>>& D, 
+     MasterVec<IntVec>& dpaths, int rd_set,
+     const Bool verbose, const Bool single, const Bool align2 )
+{
+     // Compute dlens.  This is only used in the sanity check below.  It would be
+     // good to eliminate this calculation if possible.  Then index D.
+
+     vec<int> dlens;
+     ComputeDlens( hb, D, dlens );
+     vec<vec<pair<int,int>>> nd;
+     MakeIndex( hb, D, nd, verbose );
+
+     // Build paths.
+
+
+     int64_t to_place = 0;
+     #pragma omp parallel for reduction(+:to_place)
+     for ( int64_t pid = 0; pid < dup.jsize(); pid++ ) 
+     {    if ( dup[pid] ) continue;
+          to_place++;    }
+
+     // Reserve space when placing a large number of paths.
+
+     if ( to_place > 10000000 && dpaths.size( ) == 0 )
+     {    if (verbose) cout << Date( ) << ": defining data structure" << endl;
+          // BETTER ALLOCATION NEEDED? !!!!!!!!!!!!!!!!!!!!!!!!!!
+          dpaths.resize(rd_set);
+          int mpl = 1;// heuristic
+          for(int64_t id = 0; id<rd_set; id++)
+               dpaths[id].reserve(mpl);    }
+     else{
+         dpaths.resize(rd_set);
+     }
+     if (verbose) cout << Date( ) << ": creating to_left and to_right" << endl;
+     vec<int> to_left, to_right;
+     D.ToLeft(to_left), D.ToRight(to_right);
+     if (verbose) cout << Date( ) << ": looking at reads" << endl;
+     double clock = WallClockTime( );
+     const int batch = 100000;
+     int nthreads = ( single ? 1 : omp_get_max_threads( ) );
+     #pragma omp parallel for num_threads(nthreads) schedule(dynamic,1)
+     for ( int64_t bi = 0; bi < (int64_t) paths.size( ); bi += batch )
+     {    vec<int> aplace, d, x;
+          ReadPath p;
+          for ( int64_t id = bi;
+               id < Min( bi + batch, (int64_t) paths.size( ) ); id++ )
+          {    dpaths[maprr[id]].resize(0);
+               if ( dup[id/2] ) continue;
+               p.clear( );
+               paths.unzip(p,hb,id);
+               int nplaces, pos;
+               if ( !FindPlaces( p, d, x, hb, D, dlens, to_left, to_right, 
+                    nd, align2, nplaces, pos, aplace ) )
+               {    continue;    }
+               dpaths[maprr[id]].resize( aplace.size( ) );
+               for ( int j = 0; j < aplace.isize( ); j++ )
+                    dpaths[maprr[id]][j] = aplace[j]; }     }
+     if (verbose) cout << Date( ) << ": done, used " << TimeSince(clock) << endl;
+     int64_t placed = 0;
+     for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
+          if ( dpaths[maprr[id]].size( ) > 0 ) placed++;
+     if (verbose)
+     {    cout << Date( ) << ": " 
+               << PERCENT_RATIO( 3, placed, (int64_t) paths.size( ) ) 
+               << " placed" << endl;    }    }
+
+void PlaceReads( const HyperBasevectorX& hb, const ReadPathVec& paths, 
+     const vec<Bool>& dup, const digraphE<vec<int>>& D, ReadPathVec& dpaths,
+     const Bool verbose, const Bool single, const Bool align2 )
+{
+     // Compute dlens.  This is only used in the sanity check below.  It would be
+     // good to eliminate this calculation if possible.  Then index D.
+
+     vec<int> dlens;
+     ComputeDlens( hb, D, dlens );
+     vec<vec<pair<int,int>>> nd;
+     MakeIndex( hb, D, nd, verbose );
+
+     // Build paths.
+
+     if ( dpaths.size( ) == 0 )
+     {    if (verbose) cout << Date( ) << ": defining data structure" << endl;
+          dpaths = paths;    } // TERRIBLE WAY TO RESERVE SPACE!!!!!!!!!!!!!!!!
+     else {
+         dpaths.resize(paths.size());
+     }
+     if (verbose) cout << Date( ) << ": creating to_left and to_right" << endl;
+     vec<int> to_left, to_right;
+     D.ToLeft(to_left), D.ToRight(to_right);
+     if (verbose) cout << Date( ) << ": looking at reads" << endl;
+     double clock = WallClockTime( );
+     const int batch = 100000;
+     int nthreads = ( single ? 1 : omp_get_max_threads( ) );
+     #pragma omp parallel for num_threads(nthreads) schedule(dynamic,1)
+     for ( int64_t bi = 0; bi < (int64_t) paths.size( ); bi += batch )
+     {    vec<int> aplace, d, x;
+          for ( int64_t id = bi; 
+               id < Min( bi + batch, (int64_t) paths.size( ) ); id++ )
+          {    dpaths[id].resize(0); 
+               if ( dup[id/2] ) continue;
+               const ReadPath &p = paths[id]; 
+               int nplaces, pos;
+               if ( !FindPlaces( p, d, x, hb, D, dlens, to_left, to_right, 
+                    nd, align2, nplaces, pos, aplace ) )
+               {    continue;    }
+               dpaths[id].resize( aplace.size( ) );
+               for ( int j = 0; j < aplace.isize( ); j++ )
+                    dpaths[id][j] = aplace[j];
+               dpaths[id].setOffset(pos);    }     }
      if (verbose) cout << Date( ) << ": done, used " << TimeSince(clock) << endl;
      int64_t placed = 0;
      for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
@@ -609,38 +1121,30 @@ void PlaceReads( const HyperBasevectorX& hb, const ReadPathVecX& paths,
      const Bool verbose, const Bool single, const Bool align2 )
 {
      // Compute dlens.  This is only used in the sanity check below.  It would be
-     // good to eliminate this calculation if possible.
+     // good to eliminate this calculation if possible.  Then index D.
 
-     vec<int> dlens( D.E( ), 0 );
-     #pragma omp parallel for
-     for ( int e = 0; e < D.E( ); e++ )
-     {    if ( D.O(e)[0] < 0 ) continue;
-          for ( int j = 0; j < D.O(e).isize( ); j++ )
-               dlens[e] += hb.Kmers( D.O(e)[j] );    }
-
-     // Index D.
-
-     if (verbose) cout << Date( ) << ": creating index for read placement" << endl;
-     vec<Bool> used;
-     D.Used(used);
-     vec<vec<pair<int,int>>> nd( hb.E( ) );
-     for ( int e = 0; e < D.E( ); e++ )
-     {    if ( !used[e] ) continue;
-          const vec<int>& x = D.O(e);
-          if ( x[0] < 0 ) continue;
-          for ( int j = 0; j < x.isize( ); j++ )
-               nd[ x[j] ].push( e, j );    }
+     vec<int> dlens;
+     ComputeDlens( hb, D, dlens );
+     vec<vec<pair<int,int>>> nd;
+     MakeIndex( hb, D, nd, verbose );
 
      // Build paths.
 
-     if ( dpaths.size( ) == 0 )
+     int64_t to_place = 0;
+     #pragma omp parallel for reduction(+:to_place)
+     for ( int64_t pid = 0; pid < dup.jsize(); pid++ ) 
+     {    if ( dup[pid] ) continue;
+          to_place++;    }
+     // reserve space when placing a large number of paths
+     if ( to_place > 10000000 && dpaths.size( ) == 0 )
      {    if (verbose) cout << Date( ) << ": defining data structure" << endl;
-         // BETTER ALLOCATION NEEDED? !!!!!!!!!!!!!!!!!!!!!!!!!!
+          // BETTER ALLOCATION NEEDED? !!!!!!!!!!!!!!!!!!!!!!!!!!
+          dpaths.resize(paths.size());
+          int mpl = 1;// heuristic
+          for (int64_t id = 0; id<paths.size(); id++)
+               dpaths[id].reserve(mpl);    }
+     else{
          dpaths.resize(paths.size());
-         int mpl = 1;// heuristic
-         for(int64_t id = 0; id<paths.size(); id++){
-             dpaths[id].reserve(mpl); 
-         }
      }
      if (verbose) cout << Date( ) << ": creating to_left and to_right" << endl;
      vec<int> to_left, to_right;
@@ -649,90 +1153,24 @@ void PlaceReads( const HyperBasevectorX& hb, const ReadPathVecX& paths,
      double clock = WallClockTime( );
      const int batch = 100000;
      int nthreads = ( single ? 1 : omp_get_max_threads( ) );
-     #pragma omp parallel for num_threads(nthreads)
+     #pragma omp parallel for num_threads(nthreads) schedule(dynamic,1)
      for ( int64_t bi = 0; bi < (int64_t) paths.size( ); bi += batch )
      {    vec<int> aplace, d, x;
+          ReadPath p;
           for ( int64_t id = bi; 
                id < Min( bi + batch, (int64_t) paths.size( ) ); id++ )
           {    dpaths[id].resize(0); 
                if ( dup[id/2] ) continue;
-               ReadPath p;
+               p.clear( );
                paths.unzip(p,hb,id);
-               if ( p.size( ) == 0 ) continue;
-
-               // Find minimum multiplicity edge in p.
-
-               int m = 1000000000, mp = -1;
-               for ( int j = 0; j < (int) p.size( ); j++ )
-               {    int n = nd[ p[j] ].size( );
-                    if ( n == 0 ) continue;
-                    if ( n < m )
-                    {    m = n;
-                         mp = j;    }    }
-
-               // Test placements.
-
-               if ( mp < 0 || nd[ p[mp] ].empty( ) ) continue;
-               int nplaces = 0, pos = -1;
-               for ( int i = 0; i < nd[ p[mp] ].isize( ); i++ )
-               {    int e = nd[ p[mp] ][i].first, epos = nd[ p[mp] ][i].second;
-                    x.clear( );
-                    for ( int j = 0; j < (int) p.size( ); j++ )
-                         x.push_back( p[j] );
-                    ho_interval xpos( mp, mp+1 );
-                    d = {e};
-                    int dstart = epos, dstop = epos + 1;
-                    ( !align2 ? Align : Align2 )( 
-                         D, to_left, to_right, x, xpos, d, dstart, dstop );
-     
-                    // For now, toss improper alignments.
-
-                    if ( xpos.Start( ) > 0 )
-                    {    if ( dstart > 0 ) continue;
-                         if ( dstart == 0 )
-                         {    int v = to_left[ d.front( ) ];
-                              if ( D.To(v).nonempty( ) ) continue;    }    }
-                    if ( xpos.Stop( ) < x.isize( ) ) 
-                    {    if ( dstop < D.O( d.back( ) ).isize( ) ) continue;
-                         int w = to_right[ d.back( ) ];
-                         if ( D.From(w).nonempty( ) ) continue;    }
-
-                    // Compute start position of read on d[0].
-
-                    pos = p.getOffset( );
-                    for ( int j = 0; j < dstart; j++ )
-                         pos += hb.Kmers( D.O(d[0])[j] );
-
-                    // Give up if more than one placement.
-
-                    nplaces++;
-                    if ( nplaces > 1 ) break;
-
-                    // Save.  
-                    // Just saving d, but could save ( xpos, d, dstart, dstop ).
-
-                    aplace.clear( );
-                    for ( int j = 0; j < d.isize( ); j++ )
-                         aplace.push_back( d[j] );    }
-
-               // For now require that there is a unique proper placement.
-
-               if ( nplaces != 1 ) continue;
-
-               // Check for broken placement.  Need to track down how this could
-               // ever happen.
-
-               int n = hb.K( ) - 1;
-               for ( auto f : aplace ) n += dlens[f];
-               if ( pos > n ) continue;
-
-               // Save placement.
-
+               int nplaces, pos;
+               if ( !FindPlaces( p, d, x, hb, D, dlens, to_left, to_right, 
+                    nd, align2, nplaces, pos, aplace ) )
+               {    continue;    }
                dpaths[id].resize( aplace.size( ) );
                for ( int j = 0; j < aplace.isize( ); j++ )
                     dpaths[id][j] = aplace[j];
                dpaths[id].setOffset(pos);    }     }
-
      if (verbose) cout << Date( ) << ": done, used " << TimeSince(clock) << endl;
      int64_t placed = 0;
      for ( int64_t id = 0; id < (int64_t) paths.size( ); id++ )
@@ -910,9 +1348,10 @@ void PlaceReadsSmart( const HyperBasevectorX& hb, const ReadPathVecX& paths,
           // Try to place more reads.
 
           int pl1 = 0, pl2 = 0;
+          ReadPath p;
           for ( int64_t id = bci[b]; id < bci[b+1]; id++ )
           {    if ( dpaths[id].size( ) > 0 ) pl1++;
-               ReadPath p;
+               p.clear( );
                paths.unzip(p,hb,id);
                if ( p.size( ) == 0 || dpaths[id].size( ) > 0 || dup[id/2] ) continue;
 
@@ -1014,3 +1453,562 @@ void PlaceReadsSmart( const HyperBasevectorX& hb, const ReadPathVecX& paths,
           {
                #pragma omp critical
                {    MakeDots( stopped, ndots, bci.isize( ) - 2 );    }    }    }    }
+
+// Alternative way to make the index for read placement, it's faster
+// but has a bigger footprint
+
+void MakeIndexAlt( const HyperBasevectorX& hb, const digraphE<vec<int>>& D,
+     vec<vec<pair<int,int>>> & nd, const Bool verbose )
+{    if (verbose) cout << Date( ) << ": creating index for read placement" << endl;
+     vec<Bool> used;
+     D.Used(used);
+     vec<triple<int,int,int>> edj;
+     for ( int d = 0; d < D.E( ); d++ )
+     {    if ( !used[d] ) continue;
+          const vec<int>& x = D.O(d);
+          if ( x[0] < 0 ) continue;
+          for ( int j = 0; j < x.isize( ); j++ )
+               edj.push( x[j], d, j );    }    
+     ParallelSort( edj );
+     int prev = -1;
+     for ( int64_t i = 0; i != edj.jsize( ); i++ ) {
+          const auto & t = edj[i];
+          if ( t.first != prev ) {
+               nd.append( vec<vec<pair<int,int>>> ( t.first - prev ) );
+          }
+          nd[t.first].push ( t.second, t.third );
+          prev = t.first;
+     }
+     if ( prev != hb.E( )-1 )
+          nd.append( vec<vec<pair<int,int>>> ( hb.E( ) - 1  - prev ) );
+     ForceAssertEq( hb.E( ), nd.isize( ) );
+}
+
+void ExploreEdgesWithinDistanceDepth ( const digraphE<vec<int>> & D, 
+     const vec<int> & to_left, const vec<int> & to_right,
+     const vec<int> & dlens, const int & v, vec<int> & expl, 
+     const int & DIST, const uint8_t & DEPTH, const Bool & RIGHT )
+{
+     set<int> all = {v};
+     set<int> vset = {v};
+     int dist = 0;
+     for ( uint8_t depth = 0; depth < DEPTH; depth++ ) {
+          const int start = expl.size( );
+          int d = 0;
+          for ( auto & vp : vset ) {
+               const int imax = ( RIGHT ? D.IFrom(vp).size() : D.ITo(vp).size() );
+               for ( int i = 0; i != imax; i++ ) {
+                    const int edge = (RIGHT ? D.IFrom( vp, i ) : D.ITo( vp, i ));
+                    expl.push_back( edge );
+                    d = Max( dlens[edge], d );
+               }
+          }
+          dist += d;
+          if ( dist > DIST )
+               break;
+          vset.clear( );
+          for ( int i = start; i != expl.isize( ); i++ ) {
+               const int w = (RIGHT ? to_right[expl[i]] : to_left[expl[i]]); 
+               if ( all.count( w ) ) continue;
+               vset.insert( w );
+               all.insert( w );
+          }
+     }
+     UniqueSort( expl );
+}
+
+// This is the same code as FindPlaces except that it allows for multiple
+// placements.
+
+void FindAllPlacements( const ReadPath& p, const HyperBasevectorX& hb, 
+     const digraphE<vec<int>>& D, const vec<int>& dlens,
+     const vec<int>& to_left, const vec<int>& to_right,
+     const vec<vec<pair<int,int>>>& nd, const Bool align2,
+     int& nplaces, vec<pair<int,vec<int>>> & placements )
+{
+     nplaces=0;
+
+     // Empty path?
+     
+     if ( p.size( ) == 0 ) return;
+
+     // Find minimum multiplicity edge in p.
+
+     int m = 1000000000, mp = -1;
+     for ( int j = 0; j < (int) p.size( ); j++ )
+     {    int n = nd[ p[j] ].size( );
+          if ( n == 0 ) continue;
+          if ( n < m )
+          {    m = n;
+               mp = j;    }    }
+
+     // Test placements.
+
+     if ( mp < 0 || nd[ p[mp] ].empty( ) ) return;
+     int pos = -1;
+     placements.clear( );
+     vec<int> x,d;
+     for ( int i = 0; i < nd[ p[mp] ].isize( ); i++ )
+     {    int e = nd[ p[mp] ][i].first, epos = nd[ p[mp] ][i].second;
+          x.clear( );
+          for ( int j = 0; j < (int) p.size( ); j++ ) x.push_back( p[j] );
+          ho_interval xpos( mp, mp+1 );
+          d = {e};
+          int dstart = epos, dstop = epos + 1;
+          ( !align2 ? Align : Align2 )(
+               D, to_left, to_right, x, xpos, d, dstart, dstop );
+
+          // For now, toss improper alignments.
+
+          if ( xpos.Start( ) > 0 )
+          {    if ( dstart > 0 ) continue;
+               if ( dstart == 0 )
+               {    int v = to_left[ d.front( ) ];
+                    if ( D.To(v).nonempty( ) ) continue;    }    }
+          if ( xpos.Stop( ) < x.isize( ) )
+          {    if ( dstop < D.O( d.back( ) ).isize( ) ) continue;
+               int w = to_right[ d.back( ) ];
+               if ( D.From(w).nonempty( ) ) continue;    }
+
+          // Compute start position of read on d[0].
+
+          pos = p.getOffset( );
+          for ( int j = 0; j < dstart; j++ )
+               pos += hb.Kmers( D.O(d[0])[j] );
+          
+          // Check for broken placement.  Need to track down how this could ever happen.
+
+          int n = hb.K( ) - 1;
+          for ( auto f : d ) n += dlens[f];
+          if ( pos > n ) continue;
+          
+          nplaces++;
+          placements.push_back( make_pair( pos, d ) );
+     }
+}
+
+
+// Linked-read placement
+// - First place reads uniquely
+// - Then place read partners: if a read is uniquely placed, but its partner
+// has multiple potential placements, then check if there is a unique placement
+// in a 1 kb neighborhood of the uniquely placed read. This is done by
+// exploring the graph up to a fixed distance/depth.
+// - Within a barcode take all the uniquely placed reads ( and partners )
+// and mark a zone of 50 kb around each one. If a read in that barcode
+// has multiple placement, but only ONE placement inside such a zone, then
+// choose that one. The 50 kb zones are half-open intervals on edges in the 
+// line graph
+
+void PlaceLinkedReads( const HyperBasevectorX & hb, const vec<int> & inv,
+     const digraphE<vec<int>> & D, const vec<int> & dinv, 
+     const vec<vec<vec<vec<int>>>> & dlines, const vec<Bool> & dup,
+     const vec<int64_t> & bci, const ReadPathVecX & pathsx, ReadPathVec & dpaths,
+     const int MAX_PASSES, const Bool verbose )
+{
+     // Define Heuristics
+     // Which alignment code to use (we never use ALIGN2)
+     const Bool ALIGN2 = False;
+     // How far (in edges) to explore the graph to look for a partner
+     const uint8_t DEPTH = 10;
+     // How far to explore the line graph
+     const int MAX_DEPTH = 10;
+     // How far in bases to explore the graph
+     const int DIST = 1000;
+     // What is the max separation of linked reads within a molecule
+     const int MAX_BC_SEP = 30000;
+     
+     ForceAssertGt( MAX_PASSES, 0 );
+     if ( verbose ) cout << Date( ) << ": setting up data structures" << endl;
+     vec<int> to_left, to_right, dlens(D.E( ), 0);
+     D.ToLeft( to_left );
+     D.ToRight( to_right );
+     
+     // Compute super edge lengths
+     
+     #pragma omp parallel for
+     for ( int d = 0; d < D.E( ); d++ ) {
+          if ( D.O(d)[0] < 0 ) continue;
+          int & len = dlens[d];
+          for ( auto & e : D.O(d) )
+               len += hb.Kmers(e);
+     }
+
+     // Compute index for read placement
+     
+     vec<vec<pair<int,int>>> nd;
+     MakeIndex( hb, D, nd, True );
+
+     // Compute line lengths (using median cell path length)
+     // and compute super edge location along line
+
+     if ( verbose ) cout << Date( ) << ": computing edge locations on lines" << endl;
+     vec<int> llens(dlines.size( ), 0);
+     vec<pair<int,int>> dloc(D.E( ));
+     for ( int i = 0; i < dlines.isize(); i++ ) {
+          const auto & L = dlines[i];
+          int pos = 0;
+          for ( int j = 0; j < L.isize( ); j++ ) {
+               vec<int> plens;
+               for ( auto & path : L[j] ) {
+                    int plen = 0;
+                    for ( auto & d : path ) {
+                         dloc[d] = make_pair( i, plen + pos );
+                         plen += dlens[d];
+                    }
+                    plens.push_back( plen );     
+               }
+               pos += Median( plens );
+          }
+          llens[i] = pos;
+     }
+     
+     if ( verbose ) cout << Date( ) << ": set up line graph" << endl;
+     // Compute involution on lines
+
+     vec<int> linv;
+     LineInv( dlines, dinv, linv );
+     
+     // Build line graph
+     
+     digraphE<int> LG;
+     BuildLineGraph( D, dinv, dlines, LG );
+     
+     vec<int> lg_to_left, lg_to_right;
+     LG.ToLeft( lg_to_left );
+     LG.ToRight( lg_to_right );
+
+     // Clear dpaths and reserve space if first time placing reads
+
+     size_t N = pathsx.size();
+     if ( dpaths.size() != N ) {
+          cout << Date( ) << ": reserving space (slow)" << endl;
+          dpaths.clear( );
+          dpaths.resize( N );
+          for ( size_t id = 0; id != N; id++ ) {
+               if ( dup[id/2] ) continue;
+               dpaths[id].reserve( 2 );
+          }
+     } else {
+          #pragma omp parallel for
+          for ( size_t id = 0; id < N; id++ )
+               dpaths[id].clear();
+     }
+
+     const Bool PAIR_EXPLORE_RIGHT = True;
+     int64_t tot_placed = 0;
+     vec<vec<pair<int,vec<int>>>> all_placements;
+     if ( verbose ) cout << Date( ) << ": begin read placement" << endl;
+     
+     // First place barcode 0 reads
+     
+     if ( verbose ) cout << Date( ) << ": placing un-barcoded reads" << endl;
+
+     #pragma omp parallel for schedule( dynamic, 1 ) reduction (+:tot_placed) \
+          firstprivate( all_placements )
+     for ( int64_t id1 = bci[0]; id1 < bci[1]; id1 += 2 ) {
+          if ( dup[id1/2] ) continue;
+
+          const int64_t id2 = id1 + 1;
+          all_placements.clear( );
+          all_placements.resize( 2 );
+          // try to place the individual reads uniquely
+          for ( int pi = 0; pi < 2; pi++ ) {
+               const int64_t id = id1+pi;
+               ReadPath & p = dpaths[id];
+               
+               ReadPath bp;
+               pathsx.unzip( bp, hb, id );
+               if ( bp.size() == 0 ) continue;
+
+               vec<pair<int,vec<int>>> & placements = all_placements[pi];
+               placements.clear( );
+               int nplaces = 0;
+               FindAllPlacements( bp, hb, D, dlens, to_left, to_right, nd, ALIGN2,
+                    nplaces, placements );
+               
+               if ( nplaces == 1 ) {
+                    p.setOffset( placements[0].first );
+                    for ( auto  & d : placements[0].second )
+                         p.push_back( d );
+                    tot_placed++;
+               }
+          }
+
+          // if we placed exactly one read of the pair
+          // then try to place the partner
+
+          if ( dpaths[id1].empty( ) != dpaths[id2].empty( ) ) {
+               const int64_t placed   = ( dpaths[id1].empty() ? id2 : id1 );
+               const int64_t unplaced = ( placed % 2 == 0 ? placed+1 : placed-1 );
+               const auto & placements = all_placements[unplaced-id1];
+               
+               if ( placements.nonempty() ) {
+                    ForceAssert( placements.size( ) != 1 );
+                    // p1 has already been placed
+                    // p2 is empty
+                    const ReadPath & p1 = dpaths[placed];
+                    ReadPath & p2 = dpaths[unplaced];
+                    
+                    const int v = to_right[p1.back( )];
+                    vec<int> expl;
+                    for ( auto & d : p1 )
+                         expl.push_back(d);
+                    ExploreEdgesWithinDistanceDepth( D, to_left, to_right, dlens, v, 
+                         expl, DIST, DEPTH, PAIR_EXPLORE_RIGHT );
+
+                    vec<int> hits;
+                    for ( int i = 0; i != placements.isize(); i++ ) {
+                         const int d = dinv[placements[i].second.back()];
+                         if ( BinMember( expl, d ) )
+                              hits.push_back(i);
+                    }
+                    if ( hits.size() == 1 ) {
+                         p2.setOffset( placements[hits[0]].first );
+                         for ( auto & d : placements[hits[0]].second )
+                              p2.push_back( d );
+                         tot_placed++;
+                    } 
+               }
+          }
+     }
+     
+     // Now place the barcoded reads in multiple passes
+
+     if ( verbose ) cout << Date( ) << ": placing barcoded reads" << endl;
+     all_placements.clear( );
+     map<int,ho_interval> lzone, lzone2, new_lines;
+
+     int pass = 0;
+     while ( pass < MAX_PASSES ) {
+     pass++;
+     if ( verbose )
+          cout << Date( ) << ": pass " << pass << " of " << MAX_PASSES << endl;
+     all_placements.clear( );
+     lzone.clear( );
+     lzone2.clear( );
+     #pragma omp parallel for schedule( dynamic, 1 ) reduction (+:tot_placed) \
+          firstprivate( all_placements,lzone,lzone2,new_lines )
+     for ( int b = 1; b < bci.isize()-1; b++ ) {
+          const int64_t start = bci[b], stop = bci[b+1];
+          
+          all_placements.clear( );
+          lzone.clear( );
+          lzone2.clear( );
+          all_placements.resize( stop-start );
+
+          vec<int> expl;
+          for ( int64_t id1 = start; id1 < stop; id1 += 2 ) {
+               if ( dup[id1/2] ) continue;
+
+               const int64_t id2 = id1 + 1;
+               // try to place the individual reads uniquely
+               for ( int pi = 0; pi < 2; pi++ ) {
+                    const int64_t id = id1+pi;
+                    ReadPath & p = dpaths[id];
+                    
+                    // if we already have a path, it means we placed the read
+                    // in a previous iteration, so skip
+
+                    if ( p.size() > 0 )
+                         continue;
+                         
+                    ReadPath bp;
+                    pathsx.unzip( bp, hb, id );
+                    if ( bp.size() == 0 ) continue;
+
+                    vec<pair<int,vec<int>>> & placements = all_placements[id-start];
+                    placements.clear( );
+                    int nplaces = 0;
+                    FindAllPlacements( bp, hb, D, dlens, to_left, to_right, nd, ALIGN2,
+                         nplaces, placements );
+                    
+                    if ( nplaces == 1 ) {
+                         p.setOffset( placements[0].first );
+                         for ( auto  & d : placements[0].second )
+                              p.push_back( d );
+                         tot_placed++;
+                    }
+               }
+
+               // if we placed exactly one read of the pair
+               // then try to place the partner
+
+               if ( dpaths[id1].empty( ) != dpaths[id2].empty( ) ) {
+                    const int64_t placed   = ( dpaths[id1].empty() ? id2 : id1 );
+                    const int64_t unplaced = ( placed % 2 == 0 ? placed+1 : placed-1 );
+                    const auto & placements = all_placements[unplaced-start];
+                    
+                    if ( placements.nonempty() ) {
+                         // p1 has already been placed
+                         // p2 is empty
+                         ReadPath & p1 = dpaths[placed];
+                         ReadPath & p2 = dpaths[unplaced];
+                         
+                         const int v = to_right[p1.back( )];
+                         expl.clear( );
+                         for ( auto & d : p1 )
+                              expl.push_back(d);
+                         ExploreEdgesWithinDistanceDepth( D, to_left, to_right, dlens, v, 
+                              expl, DIST, DEPTH, PAIR_EXPLORE_RIGHT );
+                         
+                         vec<int> hits;
+                         for ( int i = 0; i != placements.isize(); i++ ) {
+                              const int d = dinv[placements[i].second.back()];
+                              if ( BinMember( expl, d ) )
+                                   hits.push_back(i);
+                         }
+                         if ( hits.size() == 1 ) {
+                              p2.setOffset( placements[hits[0]].first );
+                              for ( auto & d : placements[hits[0]].second )
+                                   p2.push_back( d );
+                              tot_placed++;
+                         }
+                    }
+               }
+               
+               // now take the uniquely placed reads in the pair
+               // and create a zone around them defined by the barcode
+
+               for ( int pi = 0; pi < 2; pi++ ) {
+                    const int64_t id = id1+pi;
+                    if ( dpaths[id].size() > 0 ) {
+                         const ReadPath & p = dpaths[id];
+                         const int l = dloc[p[0]].first;
+                         const int loffset = p.getOffset( ) + dloc[p[0]].second;
+                         ho_interval bczone(  loffset-MAX_BC_SEP,
+                                              loffset+MAX_BC_SEP ); 
+                         if ( lzone.count( l ) == 0 )
+                              lzone[l]       = bczone;
+                         else {
+                              auto & linfo = lzone[l];
+                              linfo  = Span( linfo, bczone );
+                         }
+                    }
+               }
+          }
+          
+          // Extend this zone by following the line graph
+
+          for ( int depth = 0; depth < MAX_DEPTH; depth++ ) {
+               new_lines.clear( );
+               int num_ext = 0;
+               for ( auto & it : lzone ) {
+                    const int l = it.first;
+                    auto & z = it.second;
+                    int & start = z.StartMutable( ), & stop = z.StopMutable( );
+
+                    if ( start < 0 ) {
+                         num_ext++;
+                         int dist = -start;
+                         start = 0;
+                         const int v = lg_to_left[l];
+                         for ( int i = 0; i != LG.To(v).isize( ); i++ ) {
+                              const int lp = LG.ITo(v, i);
+                              if ( lzone.count( lp ) )
+                                   continue;
+                              ho_interval lp_zone ( llens[lp] - dist, llens[lp] );
+                              if ( new_lines.count( lp ) ) {
+                                   auto & lp_info = new_lines[lp];
+                                   lp_info = Span( lp_info, lp_zone );
+                              } else
+                                   new_lines[lp] = lp_zone;
+                         }
+                    }
+                    if ( stop > llens[l] ) {
+                         num_ext++;
+                         int dist = stop-llens[l];
+                         stop=llens[l];
+                         const int v = lg_to_right[l];
+                         for ( int i = 0; i != LG.From(v).isize( ); i++ ) {
+                              const int lp = LG.IFrom(v, i);
+                              if ( lzone.count(lp) )
+                                   continue;
+                              ho_interval lp_zone ( 0, dist );
+                              if ( new_lines.count( lp ) ) {
+                                   auto & lp_info = new_lines[lp];
+                                   lp_info = Span( lp_info, lp_zone );
+                              } else
+                                   new_lines[lp] = lp_zone;
+                         }
+                    }
+               }
+               if ( num_ext == 0 )
+                    break;
+               // add in new lines that we found
+               
+               for ( auto & it : new_lines )
+                    lzone[it.first] = it.second;
+          }
+          
+          // make it closed under the involution
+          
+          for ( auto & it1 : lzone ) {
+               const int l = it1.first;
+               const int rl = linv[l];
+               ho_interval & i1 = it1.second;
+               ho_interval i2( llens[l] - i1.Stop( ), llens[l] - i1.Start( ) );
+               if ( lzone.count( rl ) == 0 ) {
+                    lzone2[l] = i1;
+                    lzone2[rl] = i2;
+               } else {
+                    ho_interval j2 = Span(lzone[rl],i2);
+                    ho_interval j1 = Span( i1, ho_interval( llens[l]-j2.Stop( ), 
+                                                            llens[l]-j2.Start( ) ));
+                    lzone2[l]=j1;
+                    lzone2[rl]=j2;
+               }
+          }
+
+          // Now place reads with multiple placements
+
+          for ( int64_t id = start; id < stop; id++ ) {
+               if ( dup[id/2] ) continue;
+               if ( dpaths[id].size( ) > 0 ) continue;
+               
+               const vec<pair<int,vec<int>>> & placements = all_placements[id-start];
+               if ( placements.empty() ) continue;
+               int hit = -1;
+               for ( int pli = 0; pli != placements.isize(); pli++ ) {
+                    const auto & pl = placements[pli];
+                    const vec<int> & dp = pl.second;
+                    ForceAssertGt( dp.size(), 0 );
+                    const int l = dloc[dp[0]].first;
+                    const int loffset = pl.first + dloc[dp[0]].second;
+                    if ( lzone2.count( l ) == 0 ) continue;
+                    const auto & zone = lzone2[l];
+                    if ( zone.Contains( loffset ) ) {
+                         if ( hit == -1 )
+                              hit = pli;
+                         else {
+                              hit = -2;
+                              break;
+                         }
+                    }
+               }
+
+               if ( hit >= 0 ) {
+                    const auto & pl = placements[hit];
+                    const auto & dp = pl.second;
+                    ForceAssertGt( dp.size(), 0 );
+                    ReadPath & p = dpaths[id];
+                    p.setOffset( pl.first );
+                    for ( auto & d : dp )
+                         p.push_back( d );
+                    tot_placed++;
+               }
+          }
+     } 
+          if ( verbose )
+               cout << Date( ) << ": placed " << ToStringAddCommas(tot_placed)
+                    << " reads" << endl;
+          if ( tot_placed == 0 )
+               break;
+     } // END multiple passes
+
+     if ( verbose )
+          cout << Date( ) << ": placed " 
+               << PERCENT_RATIO( 3, tot_placed, (int64_t) dpaths.size( ) ) << " of reads"
+               << endl;
+
+}

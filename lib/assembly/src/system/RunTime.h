@@ -27,7 +27,8 @@ void ArachneInterruptHandler(ArachneSignalHandler* func);
 void NoDump( ); // Turn off core dumps.
 
 void RunTime( int no_dump=1,
-              ArachneSignalHandler* pSigFunc=&arachne_signal_handler_standard );
+              ArachneSignalHandler* pSigFunc=&arachne_signal_handler_standard,
+              const Bool decouple = True );
 
 // RunTimeLax is now just a synonym for RunTime
 inline void RunTimeLax( )

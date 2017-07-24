@@ -453,6 +453,26 @@ void ReverseSortSync( V1& v, V2& w, V3& x )
     SortSync(v,w,x,greater<typename V1::value_type>());
 }
 
+template<class V1, class V2, class V3>
+void UniqueSortSync( V1& v, V2& w, V3& x )
+{
+    SortSync(v, w, x, less<typename V1::value_type>());
+    typename V1::size_type count = 0;
+    for ( typename V1::size_type i = 0; i < v.size(); i++ )
+    {
+        if ( i > 0 && v[i] == v[i - 1] )
+            continue;
+        if ( count != i )
+        {
+            v[count] = v[i];
+            w[count] = w[i];
+            x[count] = x[i];
+        }
+        ++count;
+    }
+    v.resize(count), w.resize(count), x.resize(count);
+}
+
 // SortSync( v, w, x, y )-type functions.
 
 template<class V1, class V2, class V3, class V4, typename C, typename IDX>
@@ -571,12 +591,19 @@ void SortIndex( const V1& v, vec<IDX>& index, C comp = C() )
     PermuteVec(index, perm);
 }
 
-
 /////////////////////////////////////////////////////////////////////////////
 //
 //  Intersection & Meet - functions to find shared elements
 //
 /////////////////////////////////////////////////////////////////////////////
+
+// Diff.  Find v1 - v2 where both are unique-sorted vectors.
+
+template<class T> vec<T> Diff( const vec<T>& v1, const vec<T>& v2 )
+{    vec<T> d;
+     for ( int64_t i = 0; i < v1.jsize( ); i++ )
+          if ( !BinMember( v2, v1[i] ) ) d.push_back( v1[i] );
+     return d;    }
 
 /// Intersection: make pairs of all elements in the first vector that also
 /// occur in the second (which can result in duplicates).  Put the pairs
@@ -742,6 +769,16 @@ void invert( VVIn const& in, VVOut& out, size_t minOutSize=0 )
 template<class T> vec<T> Flatten( const vec<vec<T>>& x )
 {    vec<T> y;
      for ( auto v : x ) y.append(v);
+     return y;    }
+
+template<class T> vec<T> Flatten( const vec<vec<vec<T>>>& x )
+{    vec<T> y;
+     for ( auto v : x ) y.append( Flatten(v) );
+     return y;    }
+
+template<class T> vec<T> Flatten( const vec<vec<vec<vec<T>>>>& x )
+{    vec<T> y;
+     for ( auto v : x ) y.append( Flatten(v) );
      return y;    }
 
 inline vec<int> Contents( const vec<int>& x )

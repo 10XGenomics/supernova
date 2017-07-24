@@ -22,7 +22,8 @@ ZLIB := -lz
 CC := g++
 CFLAGS := -std=c++11 -Wextra -Wall -Wsign-promo -Woverloaded-virtual -Wendif-labels -Isrc/ $(JEMALLOC_CFLAGS)
 
-SVN_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || svnversion 2>/dev/null || echo "unknown")
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown hash")$(shell git diff-index --quiet HEAD || echo "M")
+GIT_RELEASE := $(shell git describe --tags --dirty || echo "unknown tag" )
 
 # STRICT=yes removes all exceptions from the warnings.
 ifneq ($(STRICT),yes)

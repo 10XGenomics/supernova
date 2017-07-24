@@ -7,16 +7,17 @@
 #include "paths/HyperBasevector.h"
 #include "paths/long/large/Lines.h"
 #include "10X/astats/AssemblyStats.h"
-#include "10X/astats/LineLine.h"
+#include "10X/LineLine.h"
 #include "10X/DfTools.h"
 #include "10X/Gap.h"
+#include <sstream>
 
 #define fwLog(fw, msg) { if ( (fw).IsLog() ) { (fw).Log() << msg; } }
 
 class FastaEdgeWriter {
 public:
      FastaEdgeWriter( String filename, String version, int K = 48, Bool abbrev = True,
-               Bool gap_absorb = True, String log = "", 
+               Bool gap_absorb = True, String log = "", String index = "",
                Bool gap_skip = False, 
                Bool seq_counts = False, unsigned int minsize = 0 ) : 
                _gap_repr_size(100), _K(K), _abbrev(abbrev), 
@@ -32,6 +33,13 @@ public:
                     } else {
                          _log_out.open( "/dev/null" );      // probably some stream sink that we could use instead
                          _islog=False;
+                    }
+
+                    if ( index != "" ) {
+                         _index_out.open( index.c_str(), ios::trunc );
+                         _isindex = True;
+                    } else {
+                         _isindex = False;
                     }
 
                     _seq.reserve(8000000);
@@ -196,8 +204,11 @@ public:
                     if ( i+1 == _seq.size() || (i%80)==79 )
                          _out << endl;
                }
+               Index();       // primary index will be called from outside, but we need to add the end of the record with tail on
+               IndexBreak();
           } else {
                fwLog(*this, "      -> skipped due to length=" << _seq.size() << endl);
+               IndexClear();
           }
           _count++;
 
@@ -223,6 +234,29 @@ public:
           return Log(String(ch));
      }
 
+     void Index() {
+          if ( _isindex ) {
+               if ( _index_str.str().size() == 0 ) 
+                    _index_str << _count;
+               _index_str << " " << _seq.size();
+          }
+     }
+
+     void IndexBreak() {
+          if ( _isindex ) {
+               _index_out << _index_str.str() << endl;
+               IndexClear();
+          }
+     }
+
+     void IndexClear() {
+          if ( _isindex ) {
+               _index_str.str("");
+               _index_str.clear();
+          }
+     }
+
+
      string Seq() { return _seq; }
      string Tail() { return _tail; }
 
@@ -243,17 +277,20 @@ private:
      Bool _gap_absorb;
      String _log;
      Bool _islog;
+     Bool _isindex;
      Bool _gap_skip;
      Bool _seq_counts;
      unsigned int _minsize;
 
      std::ofstream _out;
      std::ofstream _log_out;
+     std::ofstream _index_out;
 
      int _vleft;
      int _vright;
      vec<int> _edge_numbers;
      string _seq;
+     ostringstream _index_str;
      string _tail;
      size_t _count;
      int    _eat;

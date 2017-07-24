@@ -37,7 +37,11 @@ void AlignFin(
 
      const Bool longest_only, // kill all but longest alignment
      const Bool stats, // compute N50 perfect stretch and weighted error rate
-     const vec<int>& targets // use only these finished ids
+     const vec<int>& targets, // use only these finished ids
+     const int MIN_LINE,
+     const Bool full_master,
+     const Bool optb,
+     const Bool verb1
 
      )
 
@@ -55,7 +59,6 @@ void AlignFin(
 
      vec<int> llens;
      GetLineLengths( hb, D, dlines, llens );
-     const int MIN_LINE = 10000;
      int nd = D.E( );
      ReinsertLoops( hb, inv, D, dinv );
      vec<int> to_left, to_right;
@@ -183,7 +186,7 @@ void AlignFin(
           const int gap_open = 10;
           const int gap_extend = 1;
 
-          // Define path alignment functions.
+          // Define path alignment and scoring functions.
 
           auto ScorePath = [&]( const vec<int>& p )
           {    vec<int> y;
@@ -210,6 +213,23 @@ void AlignFin(
                               ++p1; ++p2;    }    }
                     best_score = Min( best_score, score );    }
                return best_score;    };
+          auto ScoreAlignedPath = [&]( const vec<int>& p, const align& a )
+          {    vec<int> y;
+               for ( auto d : p ) y.append( D.O(d) );
+               basevector B = tigs[ y[0] ];
+               for ( int l = 1; l < y.isize( ); l++ )
+               {    B.resize( B.isize( ) - (HBK-1) );
+                    B = Cat( B, tigs[ y[l] ] );    }
+               int score = 0, p1 = a.pos1( ), p2 = a.pos2( );
+               for ( int u = 0; u < a.Nblocks( ); u++ )
+               {    if ( a.Gaps(u) != 0 )
+                         score += gap_open + (Abs(a.Gaps(u))-1) * gap_extend;
+                    if ( a.Gaps(u) > 0 ) p2 += a.Gaps(u);
+                    if ( a.Gaps(u) < 0 ) p1 -= a.Gaps(u);
+                    for ( int x = 0; x < a.Lengths(u); x++ )
+                    {    if ( B[p1] != GG[p2] ) score += mismatch;
+                         ++p1; ++p2;    }    }
+               return score;    };
           auto PathAlign = [&]( const vec<int>& p, align& a )
           {    vec<int> y;
                for ( auto d : p ) y.append( D.O(d) );
@@ -217,13 +237,12 @@ void AlignFin(
                // const int verbosity = 1;
                const int verbosity = 0;
                RefAlignCore<K>( y, HBK, tigs, inv, D, dinv, dlines, genome, 
-                    galignsb, x, verbosity, report, s, g );
+                    galignsb, x, verbosity, report, s, g, False, optb );
                basevector B = tigs[ y[0] ];
                for ( int l = 1; l < y.isize( ); l++ )
                {    B.resize( B.isize( ) - (HBK-1) );
                     B = Cat( B, tigs[ y[l] ] );    }
-               int best_score = 1000000000;
-               int best_m = -1;
+               int best_score = 1000000000, best_m = -1;
                for ( int m = 0; m < (int) x.size( ); m++ )
                {    const refalign& s = x[m];
                     if ( s.chr != g + 1 ) continue;
@@ -239,29 +258,10 @@ void AlignFin(
                          {    if ( B[p1] != GG[p2] ) score += mismatch;
                               ++p1; ++p2;    }    }
                     if ( score < best_score )
-                    {    best_score = score;
-                         best_m = m;    }    }
-               if ( best_m < 0 ) 
-               {    /*
-                    out << "Not aligned." << endl;
-                    // PROBABLY DELETE THIS EXTRA STUFF LATER:
-                    const int verbosity = 2;
-                    RefAlignCore<K>( y, HBK, tigs, inv, D, dinv, dlines, 
-                         genome, galignsb, x, verbosity, report, s, g );
-                    out << report;
-                    */
-                    return False;    }
+                    {    best_score = score, best_m = m;    }    }
+               if ( best_m < 0 ) return False;
                else 
                {    a = x[best_m].a;
-                    /*
-                    // PROBABLY DELETE THIS EXTRA STUFF LATER:
-                    if ( !Proper( a, B.size( ), GG.size( ) ) )
-                    {    out << "not proper" << endl;
-                         const int verbosity = 2;
-                         RefAlignCore<K>( y, HBK, tigs, inv, D, dinv, dlines, 
-                              genome, galignsb, x, verbosity, report, s, g );
-                         out << report;    }
-                    */
                     return True;    }    };
 
           // Form them into chains.
@@ -375,7 +375,8 @@ void AlignFin(
                               */
                               // PRINT_TO( out, paths.size( ) ); // XXXXXXXXXXXXXXXX
                               const int MAX_PATHS = 200;
-                              if ( paths.isize( ) > MAX_PATHS ) break;
+                              if ( paths.empty( ) || paths.isize( ) > MAX_PATHS ) 
+                                   break;
                               vec<int> SCORE( paths.size( ), 1000000000 );
                               clock = WallClockTime( );
                               for ( int m = 0; m < paths.isize( ); m++ )
@@ -393,6 +394,8 @@ void AlignFin(
                                    // Expand p on the left and right if possible.
                                    // Then convert to a list y of base edges.
 
+                                   if ( D.O( L[l2-1][0][0] )[0] < 0 ) continue;
+                                   if ( D.O( L[l2+1][0][0] )[0] < 0 ) continue;
                                    if ( l2 > start ) p.push_front( L[l2-1][0][0]);
                                    if ( l < stop ) p.push_back( L[l2+1][0][0] );
                                    SCORE[m] = ScorePath(p);
@@ -476,7 +479,38 @@ void AlignFin(
 
                i = j - 1;    }
 
-          // Add error count to matches.
+          // Add this point we have a vector matches, consisting of pairs
+          // ( path in supergraph, alignment of that path to reference ).
+
+          // Try to extend alignments through perfect stuff.
+          // As implemented, asymmetric, and very specialized.
+
+          for ( int j = 0; j < matches.isize( ); j++ )
+          {    vec<int>& p = matches[j].first;
+               align& a = matches[j].second;
+               int l = tol[ p.back( ) ].first, m = tol[ p.back( ) ].second;
+               const vec<vec<vec<int>>>& L = dlines[l];
+               if ( m >= L.isize( ) - 2 ) continue;
+               if ( m % 2 != 0 ) continue;
+               if ( L[m+1].size( ) != 2 || L[m+2].size( ) != 1 ) continue;
+               if ( !L[m+1][0].solo( ) || !L[m+1][1].solo( ) ) continue;
+               if ( !L[m+2][0].solo( ) ) continue;
+               int s = ScoreAlignedPath( p, a );
+               for ( int j = 0; j < 2; j++ )
+               {    vec<int> q(p);
+                    Bool gap = False;
+                    for ( auto d : L[m+1][j] ) if ( D.O(d)[0] < 0 ) gap = True;
+                    for ( auto d : L[m+2][0] ) if ( D.O(d)[0] < 0 ) gap = True;
+                    if (gap) continue;
+                    q.append( L[m+1][j] );
+                    q.append( L[m+2][0] );
+                    int s2 = ScorePath(q);
+                    if ( s2 == s )
+                    {    p = q;
+                         PathAlign( p, a );
+                         break;    }    }    }
+
+          // Now add error count to matches.
 
           vec< triple< vec<int>, align, int > > matchesx;
           for ( int j = 0; j < matches.isize( ); j++ )
@@ -503,6 +537,13 @@ void AlignFin(
                     {    if ( B[p1] != GG[p2] ) score += mismatch;
                          ++p1; ++p2;    }    }
                matchesx.push( matches[j].first, matches[j].second, score );    }
+          if (verb1)
+          {    out << "\nInitial matches:\n\n";
+               for ( int i = 0; i < matchesx.isize( ); i++ )
+               {    out << "[" << i+1 << "] g = " << matchesx[i].second.pos2( )
+                         << "-" << matchesx[i].second.Pos2( ) 
+                         << ", score = " << matchesx[i].third/10.0 << ", path = " 
+                         << printSeq( matchesx[i].first ) << endl << endl;    }    }
 
           // Merge across line boundaries.
 
@@ -522,6 +563,196 @@ void AlignFin(
                          matchesx.push( p, a, score );
                          to_delete.push_back(False);    
                          to_delete[i1] = to_delete[i2] = True;    }    }    }
+          EraseIf( matchesx, to_delete );
+
+          // Extend matches to right.
+
+          vec<Bool> used( D.E( ), False );
+          for ( int i = 0; i < matchesx.isize( ); i++ )
+          for ( auto d : matchesx[i].first ) used[d] = True;
+          for ( int i = 0; i < matchesx.isize( ); i++ )
+          {    while(1)
+               {    if ( matchesx[i].second.Pos2( ) == genome[g].isize( ) ) break;
+                    Bool progress = False;
+                    int v = to_right[ matchesx[i].first.back( ) ];
+                    for ( int j = 0; j < D.From(v).isize( ); j++ )
+                    {    int g = D.IFrom(v,j);
+                         if ( used[g] || D.O(g)[0] < 0 ) continue;
+                         vec<int> p = matchesx[i].first;
+                         p.push_back(g);
+                         if ( ScorePath(p) == matchesx[i].third )
+                         {    matchesx[i].first.push_back(g);
+                              used[g] = True;
+                              align a;
+                              PathAlign( p, a );
+                              matchesx[i].second = a;
+                              progress = True;
+                              break;    }    }
+                    if ( !progress ) break;    }    }
+
+          // Extend matches to left.
+
+          for ( int i = 0; i < matchesx.isize( ); i++ )
+          {    while(1)
+               {    if ( matchesx[i].second.pos2( ) == 0 ) break;
+                    Bool progress = False;
+                    int v = to_left[ matchesx[i].first.front( ) ];
+                    for ( int j = 0; j < D.To(v).isize( ); j++ )
+                    {    int g = D.ITo(v,j);
+                         if ( used[g] || D.O(g)[0] < 0 ) continue;
+                         vec<int> p = {g};
+                         p.append( matchesx[i].first );
+                         if ( ScorePath(p) == matchesx[i].third )
+                         {    matchesx[i].first = p;
+                              used[g] = True;
+                              align a;
+                              PathAlign( p, a );
+                              matchesx[i].second = a;
+                              progress = True;
+                              break;    }    }
+                    if ( !progress ) break;    }    }
+
+          // Merge matches that abut perfectly at a vertex.
+
+          to_delete.clear( );
+          to_delete.resize( matchesx.size( ), False );
+          for ( int i1 = 0; i1 < matchesx.isize( ); i1++ )
+          for ( int i2 = 0; i2 < matchesx.isize( ); i2++ )
+          {    if ( i1 == i2 || to_delete[i1] || to_delete[i2] ) continue;
+               int d1 = matchesx[i1].first.back( );
+               int d2 = matchesx[i2].first.front( );
+               if ( to_right[d1] != to_left[d2] ) continue;
+               vec<int> p = matchesx[i1].first;
+               p.append( matchesx[i2].first );
+               int score = ScorePath(p);
+               if ( score == matchesx[i1].third + matchesx[i2].third )
+               {    align a;
+                    PathAlign( p, a );
+                    matchesx.push( p, a, score );
+                    to_delete.push_back(False);    
+                    to_delete[i1] = to_delete[i2] = True;    }    }
+          EraseIf( matchesx, to_delete );
+
+          // Merge matches that overlap perfectly along one edge.
+
+          to_delete.clear( );
+          to_delete.resize( matchesx.size( ), False );
+          for ( int i1 = 0; i1 < matchesx.isize( ); i1++ )
+          for ( int i2 = 0; i2 < matchesx.isize( ); i2++ )
+          {    if ( i1 == i2 || to_delete[i1] || to_delete[i2] ) continue;
+               int d1 = matchesx[i1].first.back( );
+               int d2 = matchesx[i2].first.front( );
+               if ( d1 != d2 ) continue;
+               vec<int> p = matchesx[i1].first;
+               p.pop_back( );
+               p.append( matchesx[i2].first );
+               int score = ScorePath(p);
+               if ( score == matchesx[i1].third + matchesx[i2].third )
+               {    align a;
+                    PathAlign( p, a );
+                    matchesx.push( p, a, score );
+                    to_delete.push_back(False);    
+                    to_delete[i1] = to_delete[i2] = True;    }    }
+          EraseIf( matchesx, to_delete );
+
+          // Merge matches that overlap perfectly through one edge.
+
+          to_delete.clear( );
+          to_delete.resize( matchesx.size( ), False );
+          for ( int i1 = 0; i1 < matchesx.isize( ); i1++ )
+          for ( int i2 = 0; i2 < matchesx.isize( ); i2++ )
+          {    if ( i1 == i2 || to_delete[i1] || to_delete[i2] ) continue;
+               int v = to_right[ matchesx[i1].first.back( ) ];
+               int w = to_left[ matchesx[i2].first.front( ) ];
+               vec<int> ds;
+               for ( int j = 0; j < D.From(v).isize( ); j++ )
+                    if ( D.From(v)[j] == w ) ds.push_back( D.IFrom(v,j) );
+               for ( int l = 0; l < ds.isize( ); l++ )
+               {    if ( D.O( ds[l] )[0] < 0 ) continue;
+                    vec<int> p = matchesx[i1].first;
+                    p.push_back( ds[l] );
+                    p.append( matchesx[i2].first );
+                    int score = ScorePath(p);
+                    if ( score == matchesx[i1].third + matchesx[i2].third )
+                    {    align a;
+                         PathAlign( p, a );
+                         matchesx.push( p, a, score );
+                         to_delete.push_back(False);    
+                         to_delete[i1] = to_delete[i2] = True;    
+                         break;    }    }    }
+          EraseIf( matchesx, to_delete );
+
+          // Merge matches that overlap through a cell.
+
+          to_delete.clear( );
+          to_delete.resize( matchesx.size( ), False );
+          for ( int i1 = 0; i1 < matchesx.isize( ); i1++ )
+          for ( int i2 = 0; i2 < matchesx.isize( ); i2++ )
+          {    if ( i1 == i2 || to_delete[i1] || to_delete[i2] ) continue;
+               int v = to_right[ matchesx[i1].first.back( ) ];
+               int w = to_left[ matchesx[i2].first.front( ) ];
+               if ( v == w ) continue;
+               vec<vec<int>> paths;
+               const int MAX_PATHS = 4;
+               const int MAX_ITERATIONS = 100;
+               const int MAX_ADD = 50;
+               Bool OK = D.EdgePaths( 
+                    to_left, to_right, v, w, paths, -1, MAX_PATHS, MAX_ITERATIONS );
+               if ( !OK || paths.empty( ) ) continue;
+               vec<int> delta( paths.size( ) ); 
+               vec<int> ids( paths.size( ), vec<int>::IDENTITY );
+               for ( int j = 0; j < paths.isize( ); j++ )
+               {    Bool gap = False;
+                    for ( auto d : paths[j] ) if ( D.O(d)[0] < 0 ) gap = True;
+                    if (gap) delta[j] = 1000000000;
+                    else
+                    {    vec<int> p = matchesx[i1].first;
+                         p.append( paths[j] );
+                         p.append( matchesx[i2].first );
+                         int score = ScorePath(p);
+                         delta[j] = ScorePath(p) 
+                              - matchesx[i1].third - matchesx[i2].third;    }    }
+               SortSync( delta, ids );
+               if ( delta[0] > MAX_ADD ) continue;
+               vec<int> p = matchesx[i1].first;
+               p.append( paths[ ids[0] ] );
+               p.append( matchesx[i2].first );
+               align a;
+               PathAlign( p, a );
+               int score = ScorePath(p);
+               matchesx.push( p, a, score );
+               to_delete.push_back(False);    
+               to_delete[i1] = to_delete[i2] = True;    
+               break;    }
+          EraseIf( matchesx, to_delete );
+
+          // Delete inferior placements.
+
+          vec<vec<ho_interval>> perfsz( matchesx.size( ) );
+          vec<int> cov( matchesx.size( ) );
+          to_delete.clear( );
+          to_delete.resize( matchesx.size( ), False );
+          for ( int i = 0; i < matchesx.isize( ); i++ )
+          {    const vec<int>& p = matchesx[i].first;
+               const align& a = matchesx[i].second;
+               vec<int> y;
+               for ( auto d : p ) y.append( D.O(d) );
+               basevector B = tigs[ y[0] ];
+               for ( int l = 1; l < y.isize( ); l++ )
+               {    B.resize( B.isize( ) - (HBK-1) );
+                    B = Cat( B, tigs[ y[l] ] );    }
+               a.PerfectIntervals2( B, genome[g], perfsz[i] );
+               cov[i] = TotalCovered( perfsz[i] );    }
+          for ( int i1 = 0; i1 < matchesx.isize( ); i1++ )
+          {    if ( to_delete[i1] ) continue;
+               for ( int i2 = 0; i2 < matchesx.isize( ); i2++ )
+               {    if ( cov[i1] <= cov[i2] ) continue;
+                    Bool subsumed = True;
+                    for ( auto h : perfsz[i2] )
+                    {    if ( !Subset( h, perfsz[i1] ) )
+                         {    subsumed = False;
+                              break;    }    }
+                    if (subsumed) to_delete[i2] = True;    }    }
           EraseIf( matchesx, to_delete );
 
           // Combine matches across gaps.  
@@ -547,28 +778,27 @@ void AlignFin(
 
           // Delete inferior placements.
 
+          vec<int> errs( matches2.size( ), 0 ), gaps( matches2.size( ), 0 );
+          vec<double> badness( matches2.size( ) );
+          const double GAP_DIV = 10.0;
           for ( int i = 0; i < matches2.isize( ); i++ )
-          {    int errsi = 0;
-               for ( auto x : matches2[i] ) errsi += x.third;
-               Bool beaten = False;
+          {    for ( auto x : matches2[i] ) errs[i] += x.third;
+               for ( int m = 1; m < matches2[i].isize( ); m++ )
+               {    int gap_start = matches2[i][m-1].second.Pos2( );
+                    int gap_stop = matches2[i][m].second.pos2( );
+                    gaps[i] += Max( 0, gap_stop - gap_start );    }
+               badness[i] = errs[i] + gaps[i]/GAP_DIV;    }
+          for ( int i = 0; i < matches2.isize( ); i++ )
+          {    Bool beaten = False;
                for ( int j = 0; j < matches2.isize( ); j++ )
-               {    int errsj = 0;
-                    for ( auto x : matches2[j] ) errsj += x.third;
-                    if ( errsj >= errsi ) continue;
-                    Bool cov = True;
-                    for ( auto x : matches2[i] )
-                    {    Bool c = False;
-                         for ( auto y : matches2[j] )
-                         {    if ( x.second.pos2( ) >= y.second.pos2( )
-                                   && x.second.Pos2( ) <= y.second.Pos2( ) )
-                              {    c = True;
-                                   break;    }    }
-                         if ( !c ) 
-                         {    cov = False;
-                              break;    }    }
-                    if (cov)
-                    {    beaten = True;
-                         break;    }    }
+               {    if ( badness[j] >= badness[i] ) continue;
+                    int starti = matches2[i][0].second.pos2( );
+                    int startj = matches2[j][0].second.pos2( );
+                    int stopi = matches2[i].back( ).second.Pos2( );
+                    int stopj = matches2[j].back( ).second.Pos2( );
+                    if ( starti < startj || stopi > stopj ) continue;
+                    beaten = True;
+                    break;    }
                if ( !beaten ) Matches[g].push_back( matches2[i] );    }
 
           // Delete matches having no long perfect stretch.
@@ -732,6 +962,10 @@ void AlignFin(
                     
           // Print.
 
+          vec<int> start( Matches[g].size( ) );
+          for ( int i = 0; i < Matches[g].isize( ); i++ )
+               start[i] = Matches[g][i][0].second.pos2( );
+          SortSync( start, Matches[g] );
           int mcount = 0;
           for ( int i = 0; i < Matches[g].isize( ); i++ )
           {    const vec< triple< vec<int>, align, int > >& M = Matches[g][i];
@@ -762,7 +996,17 @@ void AlignFin(
                          out << "L" << lid << "." << c1 << "-" << c2;
                          s = t - 1;    }
                     const vec<int>& p = M[k].first;
-                    out << "] " << "master = " << printSeq(p) << endl;
+                    out << "] " << "master = ";
+                    if ( full_master || p.size( ) <= 6 ) out << printSeq(p);
+                    else
+                    {    for ( int i = 0; i < 3; i++ )
+                         {    if ( i > 0 ) out << ",";
+                              out << p[i];    }
+                         out << "..";
+                         for ( int i = p.isize( ) - 3; i < p.isize( ); i++ )
+                         {    if ( i > p.isize( ) - 3 ) out << ",";
+                              out << p[i];    }    }
+                    out << endl;
                     const align& a = M[k].second;
                     out << "\naligned to " << g << "." << a.pos2( ) << "-" 
                          << a.Pos2( );

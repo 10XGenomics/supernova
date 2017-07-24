@@ -25,6 +25,7 @@
 #include "paths/long/large/GapToyTools6.h"
 #include "paths/long/large/Lines.h"
 #include "10X/paths/ReadPathVecX.h"
+#include "10X/Gap.h"
 #include "system/SpinLockedData.h"
 #include <memory>
 #include <fstream>
@@ -111,12 +112,6 @@ void MakeLocalAssembly1( const int lroot, const int rroot,
      const String& work_dir, VecEFasta& corrected, vecbasevector& creads,
      vec<pairing_info>& cpartner, vec<int>& cid, LongProtoTmpDirManager& tmp_mgr );
 
-void MakeLocalAssembly2( VecEFasta& corrected, const HyperBasevector& hb,
-     const vec<int>& lefts, const vec<int>& rights, ostringstream& mout,
-     SupportedHyperBasevector& shb, const Bool INJECT, const int K2_FLOOR,
-     vecbasevector& creads, LongProtoTmpDirManager& tmp_mgr, vec<int>& cid,
-     vec<pairing_info>& cpartner );
-
 void PlaceMore( const HyperBasevector& hb, const vecbasevector& bases,
      const VecPQVec& quals, ReadPathVec& paths2, vec<int64_t>& placed,
      const int place_more_level, const Bool verbose = False );
@@ -196,8 +191,11 @@ void AddNewStuff( vecbvec& new_stuff, HyperBasevector& hb, vec<int>& inv2,
 
 void ExtendPath( ReadPath& p, const int64_t i, const HyperBasevector& hb,
      const vec<int>& to_right, const bvec& bases,
-     const qvec& quals, const int min_gain, const Bool verbose,
-     const int mode );
+     const qvec& quals, const int min_gain, const Bool verbose, const int mode );
+
+void ExtendPath( ReadPath& p, const int64_t i, const HyperBasevectorX& hb,
+     const bvec& bases,
+     const qvec& quals, const int min_gain, const Bool verbose, const int mode );
 
 void ExtendPath2( ReadPath& p, const int64_t i, const HyperBasevector& hb,
      const vec<int>& to_left, const vec<int>& to_right, const bvec& bases,
@@ -297,6 +295,7 @@ void PrintBubbles( std::ostream& os, HyperBasevector& hb , const vec<int>& inv2
 
 void Validate( const HyperBasevector& hb, const ReadPathVec& paths );
 void Validate( const HyperBasevector& hb, const ReadPathVecX& paths );
+void Validate( const HyperBasevectorX& hb, const ReadPathVecX& paths );
 void Validate( const HyperBasevector& hb, const HyperBasevectorX& hbx, const ReadPathVecX& paths );
 
 void TestIndex( const HyperBasevector& hb,
@@ -411,11 +410,17 @@ String PrintHits( const int e, vec<vec<pair<int,int>>>& hits,
 void RemoveUnneededVerticesGeneralizedLoops( HyperBasevector& hb, vec<int>& inv,
      ReadPathVec& paths );
 
+void BuildSeqGaps( vecbasevector& allx, const HyperBasevector& hb, 
+        const digraphE<vec<int>>& D );
+
 void BuildAll( vecbasevector& all, const HyperBasevector& hb,
      const int64_t extra = 0 );
 
-void TranslatePaths( ReadPathVec& paths2, const HyperBasevector& hb3,
+void TranslatePaths( ReadPathVec & paths2, const HyperBasevector & hb3,
      const vec<vec<int>>& to3, const vec<int>& left3 );
+
+void TranslatePaths( ReadPathVecX & paths2, const HyperBasevectorX & hbx3,
+     const vec<vec<int>>& to3, const vec<int>& left3, const String paths_file );
 
 int N50PerfectStretch( const HyperBasevector& hb, const vecbasevector& genome,
      const Bool concatenate );

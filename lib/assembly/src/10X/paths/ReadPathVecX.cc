@@ -347,12 +347,26 @@ void ReadPathVecX::append(const ReadPathVecX& rpvx){
         return;
     ZippedData.reserve(storageSize()+rpvx.storageSize());
     ZippedData.insert(ZippedData.end(),rpvx.begin(),rpvx.end());
-    if(ZipIndex.size()!=0){
-        next_start_rid += rpvx.size();
-        recompileZipIndex();
+    next_start_rid += rpvx.size();
+    recompileZipIndex();
+}
+
+/**
+ * @brief appends blocks of raw RPY data; do not pass self argument!
+ *
+ * @param rpvx: const vec<ReadPathVecX>&
+ */
+void ReadPathVecX::append(const vec<ReadPathVecX>& blocks){
+    if(blocks.size()==0)
+        return;
+    int64_t totalStorage = storageSize();
+    for(auto& bl: blocks) totalStorage += bl.storageSize();
+    ZippedData.reserve(totalStorage);
+    for(auto& bl: blocks){
+        ZippedData.insert(ZippedData.end(),bl.begin(),bl.end());
+        next_start_rid += bl.size();
     }
-    else
-        *this = rpvx;
+    recompileZipIndex();
 }
 
 /**
@@ -421,12 +435,13 @@ void ReadPathVecX::parallel_append(const ReadPathVec& paths, const HyperBasevect
 
     reserve(paths.size());
     int nthreads = omp_get_max_threads();
-    int64_t batch = nthreads*1000;
-    #pragma omp parallel for ordered schedule(dynamic,1)
+    int64_t batch = paths.size()/(nthreads*100)+100;
+    ReadPathVecX subRPVX;
+    #pragma omp parallel for ordered schedule(dynamic,1) firstprivate(subRPVX)
     for(uint64_t start = 0; start< paths.size(); start+=batch){
 
+        subRPVX.clear();
         int64_t stop = Min(start+batch,paths.size());
-        ReadPathVecX subRPVX;
         subRPVX.reserve(stop-start);
 
         for(int64_t id = start; id<stop; id++)
@@ -450,13 +465,14 @@ void ReadPathVecX::parallel_append(const ReadPathVec& paths, const HyperBasevect
 
     reserve(sid,numReads);
     int nthreads = omp_get_max_threads();
-    int64_t batch = nthreads*1000;
+    int64_t batch = paths.size()/(nthreads*100)+100;
 
-    #pragma omp parallel for ordered schedule(dynamic,1)
+    ReadPathVecX subRPVX;
+    #pragma omp parallel for ordered schedule(dynamic,1) firstprivate(subRPVX)
     for(int64_t start = sid; start< sid+numReads; start+=batch){
 
+        subRPVX.clear();
         int64_t stop = Min(start+batch,sid+numReads);
-        ReadPathVecX subRPVX;
         subRPVX.reserve(stop-start);
 
         for(int64_t id = start; id<stop; id++)
@@ -479,13 +495,14 @@ void ReadPathVecX::parallel_append(const VReadPathVec& paths, const HyperBasevec
 
     reserve(paths.size());
     int nthreads = omp_get_max_threads();
-    int64_t batch = nthreads*1000;
+    int64_t batch = paths.size()/(nthreads*100)+100;
 
-    #pragma omp parallel for ordered schedule(dynamic,1)
+    ReadPathVecX subRPVX;
+    #pragma omp parallel for ordered schedule(dynamic,1) firstprivate(subRPVX)
     for(uint64_t start = 0; start< paths.size(); start+=batch){
 
+        subRPVX.clear();
         int64_t stop = Min(start+batch,paths.size());
-        ReadPathVecX subRPVX;
         subRPVX.reserve(stop-start);
 
         for(int64_t id = start; id<stop; id++)
@@ -510,13 +527,14 @@ void ReadPathVecX::parallel_append(const VReadPathVec& paths, const HyperBasevec
 
     reserve(sid,numReads);
     int nthreads = omp_get_max_threads();
-    int64_t batch = nthreads*1000;
+    int64_t batch = paths.size()/(nthreads*100)+100;
 
-    #pragma omp parallel for ordered schedule(dynamic,1)
+    ReadPathVecX subRPVX;
+    #pragma omp parallel for ordered schedule(dynamic,1) firstprivate(subRPVX)
     for(int64_t start = sid; start< sid+numReads; start+=batch){
 
+        subRPVX.clear();
         int64_t stop = Min(start+batch,sid+numReads);
-        ReadPathVecX subRPVX;
         subRPVX.reserve(stop-start);
 
         for(int64_t id = start; id<stop; id++)
@@ -676,9 +694,12 @@ void ReadPathVecX::updateZipIndex(){
  * @brief dangerous private functions; depends on accessIdx() not accessing ZipIndex out of bounds
  */
 void ReadPathVecX::recompileZipIndex(){
+    if(start_rid==next_start_rid) return;
+    ForceAssertGt(next_start_rid,start_rid);
     ZipIndex.reserve(storageSize()/meanPathLength()/skip+10);
+    if (ZipIndex.size()==0) ZipIndex.push_back(0);
     int64_t accidx = ZipIndex.back();
-    for(int64_t rid = (ZipIndex.size()-1)*skip + start_rid+1; rid < next_start_rid; rid++){
+    for(int64_t rid = (ZipIndex.size()-1)*skip + start_rid + 1; rid < next_start_rid; rid++){
         jumpIdx(accidx);
         if((rid-start_rid)%skip==0)
             ZipIndex.push_back(accidx);
@@ -699,10 +720,17 @@ void ReadPathVecX::destroy(){
     start_rid = 0;
     next_start_rid = 0;
     skip = 10;
+    Destroy(ZippedData);
+    Destroy(ZipIndex);
+}
+
+void ReadPathVecX::clear(){
+    start_rid = 0;
+    next_start_rid = 0;
+    skip = 10;
     ZippedData.clear();
     ZipIndex.clear();
 }
-
 
 /* P S E U D O   M O D I F I E R S   &   A C C E S S O R S  F U N C T I O N S */
 
@@ -871,7 +899,7 @@ void ReadPathVecX::printReadPath(const HyperBasevectorX& hb, const std::string m
 /* R E A D  -  W R I T E */
 
 /**
- * @brief write binary: SKIP|STARTRID|NEXTSTARTRID|ZIPINDEX|ZIPPEDDATA
+ * @brief read binary: SKIP|STARTRID|NEXTSTARTRID|ZIPINDEX|ZIPPEDDATA
  *
  * @param pathname: std::string
  */
@@ -919,8 +947,24 @@ void ReadPathVecX::readBinary(std::string pathname){
 
 }
 
+void ReadPathVecX::readBinary(BinaryReader& reader) {
+
+    reader.read(&skip);
+    reader.read(&start_rid);
+    reader.read(&next_start_rid);
+    int64_t ziSize;
+    reader.read(&ziSize);
+    int64_t zdSize;
+    reader.read(&zdSize);
+    ZipIndex.clear();
+    reader.read(&ZipIndex);
+    ZippedData.clear();
+    reader.read(&ZippedData);
+
+}
+
 /**
- * @brief read binary
+ * @brief write binary SKIP|STARTRID|NEXTSTARTRID|ZIPINDEX|ZIPPEDDATA
  *
  * @param pathname: std::string
  */
@@ -948,6 +992,20 @@ void ReadPathVecX::writeBinary(std::string pathname) const{
     // write ZippedData
     OUTFILE.write(reinterpret_cast<const char *>(ZippedData.data()), sizeof(unsigned char)*zdSize);
     OUTFILE.close();
+
+}
+
+void ReadPathVecX::writeBinary(BinaryWriter& writer) const{
+
+    writer.write(skip);
+    writer.write(start_rid);
+    writer.write(next_start_rid);
+    int64_t ziSize = ZipIndex.size();
+    writer.write(ziSize);
+    int64_t zdSize = ZippedData.size();
+    writer.write(zdSize);
+    writer.write(ZipIndex);
+    writer.write(ZippedData);
 
 }
 

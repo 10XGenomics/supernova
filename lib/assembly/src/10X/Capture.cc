@@ -9,9 +9,22 @@
 #include "graph/DigraphTemplate.h"
 #include "paths/HyperBasevector.h"
 #include "paths/long/large/Lines.h"
+#include "10X/Capture.h"
+#include "10X/CleanThe.h"
 #include "10X/Gap.h"
 #include "10X/Heuristics.h"
+#include "10X/MakeLocalsTools.h"
 #include "10X/Super.h"
+
+void CaptureLoops( const HyperBasevectorX& hb, const vec<int>& inv,
+     digraphE<vec<int>>& D, vec<int>& dinv, const Bool verbose, const Bool single )
+{    vec<int> dels;
+     CaptureMultiLoops( D, dinv, dels, verbose, single );
+     CaptureSimpleLoops( D, dinv, dels, verbose, single );
+     D.DeleteEdges(dels);
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );
+     Validate( hb, inv, D, dinv );    }
 
 // Capture multiple loops at a vertex.
 
@@ -96,22 +109,24 @@ void CaptureMultiLoops( digraphE<vec<int>>& D, vec<int>& dinv, vec<int>& dels,
 
 void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
      digraphE<vec<int>>& D, vec<int>& dinv, vec<int>& dels, 
-     const Bool allow_point, const int LONG_LINE )
+     const Bool allow_point, const int LONG_LINE, const int MAX_EDGE_IN_LOOP )
 {
+     // Set up for capture.
+
      cout << Date( ) << ": capturing messy loops" << endl;
      int mess = 0;
+     const int END_SEARCH = 10;
+     const int MAX_MESS = 20;
+
+     // Prepare standard ancillary data structures.
+
      vec<vec<vec<vec<int>>>> dlines;
-     FindLines( D, dinv, dlines, MAX_CELL_PATHS, MAX_CELL_DEPTH );
+     FindLinesFixed( D, dinv, dlines, MAX_CELL_PATHS, MAX_CELL_DEPTH );
      vec<int> to_left, to_right;
      D.ToLeft(to_left), D.ToRight(to_right);
      vec<Bool> used;
      D.Used(used);
-     const int END_SEARCH = 10;
-     const int MAX_MESS = 20;
-     const int MAX_EDGE_IN_LOOP = 2000;
      vec<int> lens( D.E( ), 0 );
-     // vec<bool> visited( D.E( ), false);
-     // compute all the super edge lengths
      #pragma omp parallel for
      for ( int d = 0; d < D.E( ); d++ )
      {    if ( D.O(d)[0] < 0 ) continue;
@@ -119,10 +134,12 @@ void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
                lens[d] += hb.Kmers( D.O(d)[j] );    }
      vec<int> llens;
      GetLineLengths( hb, D, dlines, llens );
-     vec< pair<int,int> > long_left, long_right;
+
      // long_left is a list of (start vertex of line i, i)
      // for lines that are at least LONG_LINE in length.
      // long_right (end vertex of line i, i) and length condition.
+
+     vec< pair<int,int> > long_left, long_right;
      for ( int i = 0; i < dlines.isize( ); i++ )
      {    if ( llens[i] < LONG_LINE ) continue;
           const vec<vec<vec<int>>>& L = dlines[i];
@@ -130,21 +147,28 @@ void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
           if ( used[d1] ) long_left.push( to_left[d1], i );
           if ( used[d2] ) long_right.push( to_right[d2], i );    }
      Sort(long_left), Sort(long_right);
+
+     // Start main loop.
+
      cout << Date( ) << ": main mess" << endl;
      for ( int i = 0; i < long_right.isize( ); i++ )
      {    int L1 = long_right[i].second, L2 = -1;
           int v = long_right[i].first, w = -1;
+
           // vs is the list of vertices that can be reached
           // FROM v, by exploring up to depth END_SEARCH.
           // vs lies inside the MESSY loop. And OUTSIDE L1.
+
           vec<int> vs = {v};
           for ( int d = 0; d < END_SEARCH; d++ )
           {    int n = vs.size( );
                for ( int j = 0; j < n; j++ )
                     vs.append( D.From( vs[j] ) );
                UniqueSort(vs);    }
+
           // In our exploration, did we reach the start of another line?
           // If not, then move on. Otherwise, this defines L2 and w.
+
           for ( int j = 0; j < vs.isize( ); j++ )
           {    int p = BinPosition1( long_left, vs[j] );
                if ( p >= 0 )
@@ -157,7 +181,6 @@ void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
           int rd1 = dinv[d1], rd2 = dinv[d2];
           // Let's do this only once and not repeat for rev comp
           if ( make_pair( rd2, rd1 ) <= make_pair( d1, d2 ) ) continue;
-          
           // make sure that we are not colliding with the rev comp
           vs = {v,w};
           if ( allow_point && v == w )
@@ -200,18 +223,6 @@ void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
                     if ( d != d1 ) ds.push_back(d);    }    }
           UniqueSort(ds);
           if ( ds.empty( ) ) continue;
-
-          // If we have already dealt with these edges before, continue.
-          // since edges are sorted, we won't hit -4 edge first.
-
-          /*
-          int nds = ds.isize();
-          for ( int j = 0; j < nds; j++) 
-          {    if ( visited[ ds[j] ] || visited[ dinv[ ds[j] ] ] ) 
-               {    bad=true;
-                    break;    }    }
-          if (bad) continue;
-          */
 
           // We have captured a subset vs of vertices involved in the mess,
           // and edges ds associated with these. 
@@ -301,7 +312,6 @@ void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
 
           // Make the edit.
 
-          // for ( auto d : ds ) visited[d] = True;
           mess++;
           dels.append(ds);
           int N = D.N( ), E = D.E( );
@@ -317,9 +327,330 @@ void CaptureMessyLoops( const HyperBasevectorX& hb, const vec<int>& inv,
                to_right[rd2] = N+1;
                D.AddEdgeWithUpdate( N+1, rv, x2, to_left, to_right );    }
           dinv.push_back( E + 1, E );    }
+
+     // Done.
+
+     cout << Date( ) << ": captured " << 2*mess << " messy loops, comprising " 
+          << dels.size( ) << " edges" << endl;    }
+
+void CaptureMessyLoops2( const HyperBasevectorX& hb, const vec<int>& inv,
+     digraphE<vec<int>>& D, vec<int>& dinv, const int MAX_EDGE_IN_LOOP, 
+     const int END_SEARCH, const int MAX_MESS, const Bool verbose )
+{
+     // Set up for capture.
+
+     cout << Date( ) << ": capturing messy loops two" << endl;
+     int mess = 0;
+     vec<int> dels;
+
+     // Prepare standard ancillary data structures.
+
+     vec<vec<vec<vec<int>>>> dlines;
+     FindLinesFixed( 
+          D, dinv, dlines, MAX_CELL_PATHS_EVALUATION, MAX_CELL_DEPTH_EVALUATION );
+     vec<int> to_left, to_right, llens, tol, linv;
+     D.ToLeft(to_left), D.ToRight(to_right);
+     GetLineLengths( hb, D, dlines, llens );
+     MakeTol( D, dlines, tol );
+     /*
+     vec<vec<int>> contents( dlines.size( ) );
+     for ( int d = 0; d < D.E( ); d++ )
+          if ( tol[d] >= 0 ) contents[ tol[d] ].push_back(d);
+     */
+     LineInv( dlines, dinv, linv );
+     vec<int> lens( D.E( ), 0 );
+     #pragma omp parallel for
+     for ( int d = 0; d < D.E( ); d++ )
+     {    if ( D.O(d)[0] < 0 ) continue;
+          for ( int j = 0; j < D.O(d).isize( ); j++ )
+               lens[d] += hb.Kmers( D.O(d)[j] );    }
+     digraphE<int> D2;
+     BuildLineGraph( D, dinv, dlines, D2 );
+     vec<int> to_left2, to_right2;
+     D2.ToLeft(to_left2), D2.ToRight(to_right2);
+
+     // Find pairs of lines that have a messy loop between them.
+
+     cout << Date( ) << ": finding pairs" << endl;
+     vec<pair<int,int>> ll;
+     #pragma omp parallel for schedule(dynamic, 1000)
+     for ( int l1 = 0; l1 < dlines.isize( ); l1++ )
+     {    const vec<vec<vec<int>>>& L1 = dlines[l1];
+          if ( IsCell( D.O( L1.back( )[0][0] ) ) ) continue;
+          int v = to_right2[l1];
+
+          // Let vs be the list of vertices that can be reached FROM v, by exploring 
+          // up to depth END_SEARCH in the line graph, eschewing lines of length
+          // exceeding MAX_EDGE_IN_LOOP.
+
+          vec<int> vs = {v};
+          for ( int d = 0; d < END_SEARCH; d++ )
+          {    int n = vs.size( );
+               for ( int j = 0; j < n; j++ ) 
+               {    int w = vs[j];
+                    for ( int m = 0; m < D2.From(w).isize( ); m++ )
+                    {    int l2 = D2.IFrom( w, m );
+                         if ( llens[l2] <= MAX_EDGE_IN_LOOP )
+                              vs.push_back( D2.From(w)[m] );    }    }
+               UniqueSort(vs);    }
+
+          // Find the lines that start at a vertex in vs.
+
+          vec<int> ls;
+          for ( auto x : vs )
+          for ( int j = 0; j < D2.From(x).isize( ); j++ )
+          {    int l = D2.IFrom(x,j);
+               ls.push_back(l);    }
+          UniqueSort(ls);
+
+          // Traverse the possibilities for l2.
+
+          for ( auto l2 : ls )
+          {    
+               // Consider putting a messy loop between lines l1 and l2.
+
+               const vec<vec<vec<int>>>& L2 = dlines[l2];
+               if ( IsCell( D.O( L2.front( )[0][0] ) ) ) continue;
+               if ( to_left2[l1] == to_right2[l2] ) continue;
+
+               // The loop is bounded on the left by vertex v and on the right
+               // by vertex w.  Find the vertices vs that are between.
+
+               int w = to_left2[l2];
+               vec<int> vs = {v};
+               for ( int d = 0; d < END_SEARCH; d++ )
+               {    int n = vs.size( );
+                    for ( int j = 0; j < n; j++ ) 
+                    {    int x = vs[j];
+                         for ( int k = 0; k < D2.From(x).isize( ); k++ )
+                         {    if ( x == w && D2.IFrom(x,k) == l2 ) continue;
+                              vs.push_back( D2.From(x)[k] );    }    }
+                    UniqueSort(vs);    }
+               if ( !BinMember( vs, w ) ) continue;
+               if ( BinMember( vs, to_left2[l1] ) ) continue;
+               if ( BinMember( vs, to_right2[l2] ) ) continue;
+
+               // Require complete set.
+
+               Bool complete = True;
+               for ( auto x : vs )
+               {    for ( int j = 0; j < D2.From(x).isize( ); j++ )
+                    {    if ( x == w && D2.IFrom(x,j) == l2 ) continue;
+                         if ( !BinMember( vs, D2.From(x)[j] ) ) 
+                              complete = False;    }
+                    for ( int j = 0; j < D2.To(x).isize( ); j++ )
+                    {    if ( x == v && D2.ITo(x,j) == l1 ) continue;
+                         if ( !BinMember( vs, D2.To(x)[j] ) ) 
+                              complete = False;    }    }
+               if ( !complete ) continue;
+
+               // Don't allow sources or sinks.  SUPERCEDED BY NEXT.
+
+               Bool bad = False;
+               for ( auto x : vs ) if ( D2.Source(x) || D2.Sink(x) ) bad = True;
+               if (bad) continue;
+
+               // Require that every vertex goes forward to w.
+
+               {    vec<int> vsr = {w};
+                    set<int> vsrs;
+                    vsrs.insert(w);
+                    for ( int i = 0; i < vsr.isize( ); i++ )
+                    {    int x = vsr[i];
+                         for ( int j = 0; j < D2.To(x).isize( ); j++ )
+                         {    if ( D2.ITo(x,j) == l1 ) continue;
+                              {    int y = D2.To(x)[j];
+                                   if ( Member( vsrs, y ) ) continue;
+                                   vsr.push_back(y);
+                                   vsrs.insert(y);    }    }    }
+                    Sort(vsr);
+                    if ( vs != vsr ) continue;    }
+
+               // Save.
+
+               #pragma omp critical
+               {    ll.push( l1, l2 );    
+                    if (verbose) 
+                         cout << "saving link from " << l1 << " to " << l2 << endl;
+                              }    }    }
+     Sort(ll);
+
+     // By transitivity, remove line pairs that are not minimal.  Also don't go
+     // from a line to itself or its inv.
+
+     cout << Date( ) << ": remove by transitivity" << endl;
+     vec<Bool> to_delete( ll.size( ), False );
+     for ( int i = 0; i < ll.isize( ); i++ )
+     {    int l1 = ll[i].first, l2 = ll[i].second;
+          if ( l2 == l1 || l2 == linv[l1] ) to_delete[i] = True;
+          vec<int> L3;
+          int low = LowerBound1(ll, l1), high = UpperBound1(ll, l1);
+          for ( int j = low; j < high; j++ )
+               if ( ll[j].second != l2 ) L3.push_back( ll[j].second );
+          Bool mid = False;
+          for ( auto l3 : L3 )
+          {    int low = LowerBound1(ll, l3), high = UpperBound1(ll, l3);
+               for ( int j = low; j < high; j++ )
+                    if ( ll[j].second == l2 ) mid = True;    }
+          if (mid) 
+          {    to_delete[i] = True;    
+               if (verbose) 
+                    cout << "deleting link from " << l1 << " to " << l2 << endl;
+                         }    }
+     EraseIf( ll, to_delete );
+
+     // Now make the edits.
+
+     vec<Bool> touched( dlines.size( ), False );
+     cout << Date( ) << ": main mess" << endl;
+     for ( auto x : ll )
+     {    int L1 = x.first, L2 = x.second;
+
+          // Let's do this only once and not repeat for rev comp.
+          // Also make sure that we are not colliding with the rev comp.
+
+          if ( make_pair( linv[L2], linv[L1] ) < make_pair( L1, L2 ) ) continue;
+          if ( !IsUnique( vec<int>{ L1, L2, linv[L1], linv[L2] } ) ) continue;
+
+          // Compute the intermediate lines.
+
+          int v = to_right2[L1], w = to_left2[L2];
+          vec<int> vs = {v};
+          for ( int d = 0; d < END_SEARCH; d++ )
+          {    int n = vs.size( );
+               for ( int j = 0; j < n; j++ ) 
+               {    int x = vs[j];
+                    for ( int k = 0; k < D2.From(x).isize( ); k++ )
+                    {    if ( x == w && D2.IFrom(x,k) == L2 ) continue;
+                         vs.push_back( D2.From(x)[k] );    }    }
+               UniqueSort(vs);    }
+          vec<int> mid;
+          for ( auto x : vs )
+          {    for ( int j = 0; j < D2.From(x).isize( ); j++ )
+               {    if ( x == w && D2.IFrom(x,j) == L2 ) continue;
+                    mid.push_back( D2.IFrom(x,j) );    }    }
+          if ( mid.isize( ) > MAX_MESS || mid.empty( ) ) continue;
+
+          // Make sure nothing really weird happened.
+
+          Bool weird = ( touched[L1] || touched[L2] );
+          for ( auto l : mid ) if ( touched[l] ) weird = True;
+          if (weird) continue;
+          for ( auto l : mid ) touched[l] = touched[ linv[l] ] = True;
+
+          // Compute the edge set.
+
+          vec<int> ds;
+          for ( auto l : mid ) 
+          {    const vec<vec<vec<int>>>& X = dlines[l];
+               // ds.append( contents[l] );
+               ds.append( Contents(X) );
+               for ( int j = 1; j < X.isize( ); j += 2 )
+               {    if ( X[j].solo( ) && X[j][0].empty( ) )
+                    {    int v = to_right[ X[j-1][0][0] ];
+                         ds.push_back( D.IFrom(v,0) );    }    }    }
+          UniqueSort(ds);
+          int d1 = dlines[L1].back( )[0][0], d2 = dlines[L2].front( )[0][0];
+          int rd1 = dinv[d1], rd2 = dinv[d2];
+
+          // Check for funny case where ds overlaps dinv[ds], which would
+          // wreak havoc below.
+
+          Bool funny = False;
+          for ( auto d : ds ) if ( BinMember( ds, dinv[d] ) ) funny = True;
+          if (funny) continue;
+
+          // OK good to go.  Expand any cell edges in ds.
+
+          int nds = ds.size( );
+          vec<Bool> to_delete( nds, False );
+          for ( int j = 0; j < nds; j++ )
+          {    int d = ds[j];
+               if ( IsCell( D.O(d) ) )
+               {    to_delete[j] = True;
+                    int E = D.E( );
+                    ReinsertLoop( d, hb, inv, D, dinv, to_left, to_right );
+                    if ( dinv[d] != d )
+                    {    for ( int f = E; f < E + ( D.E( ) - E )/2; f++ )
+                         {    ds.push_back(f);
+                              to_delete.push_back(False);    }    }
+                    else
+                    {    for ( int f = E; f < D.E( ); f++ )
+                         {    ds.push_back(f);    
+                              to_delete.push_back(False);    }    }    }    }
+          EraseIf( ds, to_delete );
+
+          // Update vertices, as expansion may have invalidated them.
+
+          v = to_right[d1], w = to_left[d2];
+          int rv = to_right[ dinv[d2] ], rw = to_left[ dinv[d1] ];
+
+          // Form the ds edges into a cell.  Ditto for rc.
+
+          digraphE<vec<int>> G( digraphE<vec<int>>::COMPLETE_SUBGRAPH_EDGES,
+               D, ds, to_left, to_right );
+          vec<int> gto_left, gto_right;
+          G.ToLeft(gto_left), G.ToRight(gto_right);
+          int cv = -1, cw = -1;
+          for ( int pass = 1; pass <= 2; pass++ )
+          for ( int j = 0; j < ds.isize( ); j++ )
+          {    int d = ds[j];
+               if ( to_left[d] == ( pass == 1 ? v : w ) )
+               {    ( pass == 1 ? cv : cw ) = gto_left[j];
+                    break;    }
+               if ( to_right[d] == ( pass == 1 ? v : w ) )
+               {    ( pass == 1 ? cv : cw ) = gto_right[j];
+                    break;    }    }
+          // Clearly something is wrong here.  Assert commented out, bailing
+          // in failed cases instead.  Don't know if this problem is still here.
+          if ( cv < 0 || cw < 0 ) continue;
+          // ForceAssertGe( cv, 0 ), ForceAssertGe( cw, 0 );
+          ForceAssert( ds.nonempty( ) );
+          vec<int> rds;
+          for ( auto d : ds ) rds.push_back( dinv[d] );
+          Sort(rds);
+          cell c1( G, cv, cw );
+          G.Reverse( );
+          for ( int g = 0; g < G.E( ); g++ )
+               G.OMutable(g) = D.O( dinv[ ds[g] ] );
+          cell c2( G, cw, cv );
+          vec<int> x1, x2;
+          c1.CellEncode(x1), c2.CellEncode(x2);
+          if (verbose)
+          {    cout << "\nlinking " << L1 << " --> " << L2 << "   ==and==   " 
+                    << linv[L2] << " --> " << linv[L1] << endl;
+               cout << "deleting edges " << printSeq(ds) << endl;    }
+          
+          // Add the rev comp edges to ds.
+
+          nds = ds.isize( );
+          for ( int j = 0; j < nds; j++ ) ds.push_back( dinv[ ds[j] ] );
+
+          // Make the edit.
+
+          mess++;
+          dels.append(ds);
+          int N = D.N( ), E = D.E( );
+          if ( v != w )
+          {    D.AddEdgeWithUpdate( v, w, x1, to_left, to_right );
+               D.AddEdgeWithUpdate( rv, rw, x2, to_left, to_right );    }
+          else
+          {    D.AddVertices(2);
+               D.GiveEdgeNewFromVxWithUpdate( d2, v, N, to_left );
+               to_left[d2] = N;
+               D.AddEdgeWithUpdate( v, N, x1, to_left, to_right );
+               D.GiveEdgeNewToVxWithUpdate( rd2, rv, N+1, to_right );
+               to_right[rd2] = N+1;
+               D.AddEdgeWithUpdate( N+1, rv, x2, to_left, to_right );    }
+          dinv.push_back( E + 1, E );    }
+
+     // Done.
+
      cout << Date( ) << ": captured " << 2*mess << " messy loops, comprising " 
           << dels.size( ) << " edges" << endl;
-     Validate( hb, inv, D, dinv );    }
+     D.DeleteEdges(dels);
+     RemoveUnneededVertices( D, dinv );
+     CleanupCore( D, dinv );    }
 
 // Simple loops have the following topology:
 // Vertices u,v,w. Edge d from u to v. Edge f from v to w. Edge e from v to v.

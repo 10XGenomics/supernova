@@ -1,0 +1,33 @@
+#
+# Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
+#
+
+@include "_asm_stages.mro"
+
+pipeline _ASM_SN(
+    in  int         min_kmer_obs,
+    in  fastq.gz[]  fastqs,
+    in  txt         barcode_whitelist,
+    out bv          asm_graph,
+)
+{
+    call volatile MSP(
+        trim_min_qual = 7,
+        fastqs   = self.fastqs,
+        barcode_whitelist = self.barcode_whitelist,
+    )
+
+    call volatile SHARD_ASM(
+        min_kmer_obs = self.min_kmer_obs,
+        chunks       = MSP.chunks,
+    )
+
+    call volatile MAIN_ASM_SN(
+        sedge_asm = SHARD_ASM.sedge_asm,
+        sedge_bcs = SHARD_ASM.sedge_bcs,
+    )
+
+    return (
+        asm_graph = MAIN_ASM_SN.asm_graph,
+    )
+}
