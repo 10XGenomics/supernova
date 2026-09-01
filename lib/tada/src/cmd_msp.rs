@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::env;
 
 use utils::BcIndexer;
@@ -19,7 +19,7 @@ use shardio::shard::{ShardWriteManager, ShardSender};
 use multifastq::{MultiFastqIter, InputRead, Fastq};
 use msp::simple_scan;
 use martian::{JsonDict, MartianStage};
-use rustc_serialize::json::{Json};
+use serde_json::Value as Json;
 use crossbeam;
 use std::mem;
 
@@ -60,7 +60,7 @@ pub fn main_msp(trim_min_qual: u8, bc_wl: &Path, fastq: Vec<PathBuf>, permutatio
             let chnk = Vec::from(f);
             let sender = shard.get_sender();
 
-            let mut handle = scope.spawn(move ||
+            let handle = scope.spawn(move |_|
             {
                 let fq_src = chnk.iter().flat_map(|p| MultiFastqIter::new(&p, &bc_idx));
                 let nr = process_fastq_set(trim_min_qual, K, P, &permutation, fq_src, sender);
@@ -70,12 +70,12 @@ pub fn main_msp(trim_min_qual: u8, bc_wl: &Path, fastq: Vec<PathBuf>, permutatio
         }
 
         while let Some(handle) = handles.pop() {
-            nreads += handle.join();
+            nreads += handle.join().unwrap();
         }
 
 //        handles.iter().flat_map( |h| nreads += h.join() );
 
-    });
+    }).unwrap();
     info!( "MSP read count: {}", nreads);
 }
 
@@ -250,11 +250,11 @@ pub struct MspMartian;
 impl MartianStage for MspMartian {
     fn split(&self, args: JsonDict) -> JsonDict {
 
-        let fastqs : Vec<String> = args["fastqs"].as_array().unwrap().into_iter().map(|x| x.as_string().unwrap().to_string()).collect();
-        //let fastqs_fofn = args["fastqs"].as_string().unwrap();
+        let fastqs : Vec<String> = args["fastqs"].as_array().unwrap().into_iter().map(|x| x.as_str().unwrap().to_string()).collect();
+        //let fastqs_fofn = args["fastqs"].as_str().unwrap();
         //let fastqs = utils::read_fofn(Path::new(fastqs_fofn));
 
-        let _whitelist = args["barcode_whitelist"].as_string().unwrap();
+        let _whitelist = args["barcode_whitelist"].as_str().unwrap();
         let whitelist  = Path::new(_whitelist);
 
         let mut permutation_file = env::current_dir().unwrap();
@@ -269,35 +269,35 @@ impl MartianStage for MspMartian {
         {
             let fastqs = in_files.iter().map(|c| Json::String(c.clone())).collect();
 
-            let mut bt = BTreeMap::new();
+            let mut bt = JsonDict::new();
             bt.insert("chunk".to_string(), Json::Array(fastqs));
             let p2s = permutation_file.clone().into_os_string().into_string().unwrap();
             bt.insert("permutation".to_string(), Json::String(p2s));
-            bt.insert("__mem_gb".to_string(), Json::F64(MEM_ALLOC_GB as f64));
-            bt.insert("__threads".to_string(), Json::I64(4));
+            bt.insert("__mem_gb".to_string(), Json::from(MEM_ALLOC_GB as f64));
+            bt.insert("__threads".to_string(), Json::from(4));
             chunks.push(Json::Object(bt));
         }
 
 
         let chunk_array = Json::Array(chunks);
-        let mut cc =  BTreeMap::new();
+        let mut cc =  JsonDict::new();
         cc.insert("chunks".to_string(), chunk_array);
         cc
     }
 
     fn main(&self, args: JsonDict, outs: JsonDict) -> JsonDict {
-        let chunk = args["chunk"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_string().unwrap())).collect();
+        let chunk = args["chunk"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
         //let chunk  = vec![PathBuf::from(_chunk)];
 
-        let _whitelist = args["barcode_whitelist"].as_string().unwrap();
+        let _whitelist = args["barcode_whitelist"].as_str().unwrap();
         let whitelist  = Path::new(_whitelist);
 
-        let _permutation = args["permutation"].as_string().unwrap();
+        let _permutation = args["permutation"].as_str().unwrap();
         let permutation = Path::new(_permutation);
 
         let trim_min_qual = args["trim_min_qual"].as_u64().unwrap() as u8;
 
-        let _out_fn = {outs.get("chunks").unwrap().as_string().unwrap().clone()};
+        let _out_fn = {outs.get("chunks").unwrap().as_str().unwrap().clone()};
         let out_fn = Path::new(_out_fn);
 
         let files = main_msp(trim_min_qual, &whitelist, chunk, &permutation, &out_fn);
@@ -314,7 +314,7 @@ impl MartianStage for MspMartian {
                 chunk_vec.push(chunk.clone());
             }
 
-            let mut obj = BTreeMap::new();
+            let mut obj = JsonDict::new();
             obj.insert("chunks".to_string(), Json::Array(chunk_vec));
             obj
     }

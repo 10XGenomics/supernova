@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::cmp::max;
-use ordered_float::NotNaN;
+use ordered_float::NotNan;
 
 pub struct BarcodeValidator<'a> {
 	pub whitelist: &'a HashMap<Vec<u8>, u32>,
@@ -15,7 +15,7 @@ pub struct BarcodeValidator<'a> {
 
 const BASE_OPTS: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
-type of64 = NotNaN<f64>;
+type of64 = NotNan<f64>;
 
 impl<'a> BarcodeValidator<'a> {
 
@@ -23,7 +23,7 @@ impl<'a> BarcodeValidator<'a> {
         let mut a = Vec::from(barcode);
 
         let mut candidates: Vec<(of64, Vec<u8>)> = Vec::new();
-        let mut total_likelihood = of64::from(0.0);
+        let mut total_likelihood = of64::new(0.0).unwrap();
          
 	    for pos in 0 .. barcode.len() {
             let qv = qual[pos];
@@ -36,8 +36,8 @@ impl<'a> BarcodeValidator<'a> {
                 match self.whitelist.get(&a) {
                     Some(bc_id) => {
                         let bc_count = self.bc_counts.get(&(gem_group, *bc_id)).cloned().unwrap_or(0);
-                        let prob_edit = max(of64::from(0.0005), of64::from(probability(qv)));
-                        let likelihood = prob_edit * max(of64::from(bc_count as f64), of64::from(0.5));
+                        let prob_edit = max(of64::new(0.0005).unwrap(), of64::new(probability(qv)).unwrap());
+                        let likelihood = prob_edit * max(of64::new(bc_count as f64).unwrap(), of64::new(0.5).unwrap());
                         candidates.push((likelihood, a.clone()));
                         total_likelihood += likelihood;
                     },
@@ -49,7 +49,7 @@ impl<'a> BarcodeValidator<'a> {
 	
         println!("{:?}", candidates);
 
-        let thresh = of64::from(self.bc_confidence_threshold);
+        let thresh = of64::new(self.bc_confidence_threshold).unwrap();
 
         let best_option = candidates.into_iter().max();
         

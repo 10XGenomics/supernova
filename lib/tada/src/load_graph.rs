@@ -2,6 +2,7 @@
 // Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
 //
 
+use serde::{Serialize, Deserialize};
 use std::io::prelude::*;
 use std::cmp;
 use std::fs::File;
@@ -9,15 +10,13 @@ use std::io::{BufWriter, BufReader};
 use std::collections::{HashSet, HashMap};
 
 use bincode;
-use bincode::rustc_serialize::{EncodingResult, DecodingResult, encode_into, decode_from};
-use rustc_serialize::json;
+use serde_json;
 
 use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
 use flate2::Compression;
 
 use std::collections::VecDeque;
-use std::ascii::AsciiExt;
 
 use bwt;
 use bitenc;
@@ -33,7 +32,7 @@ const LEN_BUCKET_SIZE: usize = 100;
 
 // possible different layout to save memory.
 // start_pos and length index into a shared BitEnd
-#[derive(RustcEncodable, RustcDecodable, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Edge {
     pub exts: kmer::Exts,
 
@@ -54,7 +53,7 @@ pub struct Barcode {
 }
 
 
-#[derive(RustcEncodable, RustcDecodable)]
+#[derive(Serialize, Deserialize)]
 pub struct Graph {
     // Concatenated edges
     pub all_seq: bitenc::BitEnc,
@@ -480,7 +479,7 @@ impl Graph {
     }
 }
 
-#[derive(RustcDecodable, RustcEncodable)]
+#[derive(Deserialize, Serialize)]
 struct GraphStats {
     num_edges: usize,
     seq_len: usize,
@@ -491,7 +490,7 @@ struct GraphStats {
 
 impl GraphStats {
     fn write_to_json(&self, json_file: &str) {
-        let encoded = json::encode(&self).unwrap();
+        let encoded = serde_json::to_string(&self).unwrap();
         let f = match File::create(json_file) {
             Err(err) => panic!("couldn't create file {}: {}", json_file, err),
             Ok(f) => f,
@@ -670,24 +669,24 @@ pub fn load_graph(filename: &str) -> Result<Graph, String> {
     Ok(g)
 }*/
 
-pub fn write_graph(g: &Graph, filename: &str) -> EncodingResult<()> {
+pub fn write_graph(g: &Graph, filename: &str) -> bincode::Result<()> {
     let f = match File::create(filename) {
         Err(err) => panic!("couldn't create file {}: {}", filename, err),
         Ok(f) => f,
     };
     let writer = BufWriter::new(f);
-    let mut encoder = ZlibEncoder::new(writer, Compression::Fast);
-    encode_into(&g, &mut encoder, bincode::SizeLimit::Infinite)
+    let mut encoder = ZlibEncoder::new(writer, Compression::fast());
+    bincode::serialize_into(&mut encoder, &g)
 }
 
-pub fn read_graph(filename: &str) -> DecodingResult<Graph> {
+pub fn read_graph(filename: &str) -> bincode::Result<Graph> {
     let f = match File::open(filename) {
         Err(err) => panic!("couldn't open file {}: {}", filename, err),
         Ok(f) => f,
     };
     let reader = BufReader::new(f);
     let mut decoder = ZlibDecoder::new(reader);
-    decode_from(&mut decoder, bincode::SizeLimit::Infinite)
+    bincode::deserialize_from(&mut decoder)
 }
 
 #[cfg(test)]

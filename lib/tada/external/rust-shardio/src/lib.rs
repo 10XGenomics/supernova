@@ -4,10 +4,10 @@
 
 //! Efficiently write Rust structs to shard files from multiple threads.
 
-extern crate rustc_serialize;
 extern crate byteorder;
 extern crate libc;
 extern crate bincode;
+extern crate serde;
 
 #[cfg(test)]
 extern crate tempfile;

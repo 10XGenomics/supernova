@@ -4,6 +4,7 @@
 
 //! Various useful methods (could be cleaned up)
 
+use serde::{Serialize, Deserialize};
 use std::fs::File;
 use std::path::{Path};
 use std::collections::HashMap;
@@ -17,35 +18,33 @@ use std::str::FromStr;
 use std::io;
 
 use bincode;
-use rustc_serialize::{Encodable, Decodable};
-use bincode::rustc_serialize::{EncodingResult, DecodingResult, encode_into, decode_from};
 
 use itertools::{Itertools};
 use fx::FxHashMap;
 
 
-pub fn write_obj<T: Encodable, P: AsRef<Path> + Debug>(g: &T, filename: P) -> EncodingResult<()> {
+pub fn write_obj<T: Serialize, P: AsRef<Path> + Debug>(g: &T, filename: P) -> bincode::Result<()> {
     let f = match File::create(&filename) {
         Err(err) => panic!("couldn't create file {:?}: {}", filename, err),
         Ok(f) => f,
     };
     let mut writer = BufWriter::new(f);
-    encode_into(&g, &mut writer, bincode::SizeLimit::Infinite)
+    bincode::serialize_into(&mut writer, &g)
 }
 
-pub fn read_obj<T: Decodable, P: AsRef<Path> + Debug>(filename: P) -> DecodingResult<T> {
+pub fn read_obj<T: for<'de> Deserialize<'de>, P: AsRef<Path> + Debug>(filename: P) -> bincode::Result<T> {
     let f = match File::open(&filename) {
         Err(err) => panic!("couldn't open file {:?}: {}", filename, err),
         Ok(f) => f,
     };
     let mut reader = BufReader::new(f);
-    decode_from(&mut reader, bincode::SizeLimit::Infinite)
+    bincode::deserialize_from(&mut reader)
 }
 
 
 
 
-#[derive(Clone, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct  MultiVec<T> {
     pub items: Vec<T>,
     pub start_pos: Vec<usize>,

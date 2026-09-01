@@ -169,6 +169,8 @@ fn random_dna<R: Rng>(sz: usize, r: &mut R) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::all_kmers;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
     use rand;
 
     #[test]
@@ -204,7 +206,7 @@ mod tests {
         let p = 8;
         let permutation: Vec<usize> = (0..(1 << 2 * p)).collect();
 
-        let mut rng = rand::XorShiftRng::new_unseeded();
+        let mut rng = SmallRng::seed_from_u64(0);
         for _ in 0..10 {
             let k = 50usize;
             let dna = super::random_dna(150, &mut rng);

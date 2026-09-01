@@ -3,6 +3,7 @@
 //
 
 use std::fmt;
+use serde::{Serialize, Deserialize};
 
 use super::{Dir, bits_to_base};
 
@@ -14,7 +15,7 @@ use super::{Dir, bits_to_base};
 /// letters A, C, G, T. So overall the bits are:
 ///  right   left
 /// T G C A T G C A
-#[derive(Eq, PartialEq, Copy, Clone, RustcEncodable, RustcDecodable, Ord, PartialOrd, Hash)]
+#[derive(Eq, PartialEq, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Hash)]
 pub struct Exts {
     pub val: u8,
 }

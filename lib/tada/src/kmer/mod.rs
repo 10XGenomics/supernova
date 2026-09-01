@@ -13,8 +13,8 @@ pub use self::dir::Dir;
 pub use self::exts::Exts;
 
 
-use bincode::rustc_serialize::{encode_into, decode};
 use bincode;
+use serde::{Serialize, Deserialize};
 use shardio::shard::{Serializer, Shardable};
 
 
@@ -46,7 +46,7 @@ fn block_get(kmer: u64, pos: usize) -> u8 {
 
 /// Store a variable-length DNA sequence in a packed 2-bit encoding, up 92bp in length
 /// The length of the sequence is stored in the lower 8 bits of storage
-#[derive(Hash, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, RustcEncodable, RustcDecodable)]
+#[derive(Hash, Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize)]
 pub struct Lmer {
     storage: [u64; LMER_BLOCKS],
 }
@@ -344,7 +344,7 @@ pub fn bits_to_ascii(c: u8) -> u8 {
 
 /// Barcoded String Partition. Store an MSP-substring of read, tagged with the partition
 /// number and read number within the partition.
-#[derive(Debug, Copy, Clone, RustcEncodable, RustcDecodable)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Bsp {
     /// MSP substring
     pub sequence: Lmer,
@@ -439,12 +439,12 @@ pub struct BspSer {}
 
 impl Serializer<Bsp> for BspSer {
     fn serialize(&self, items: &Vec<Bsp>, buf: &mut Vec<u8>) {
-        encode_into(items, buf, bincode::SizeLimit::Infinite).unwrap();
+        bincode::serialize_into(buf, items).unwrap();
     }
 
     fn deserialize(&self, buf: &mut Vec<u8>, data: &mut Vec<Bsp>) {
-        let mut buf_slice = buf.as_mut_slice();
-        let r: Vec<Bsp> = decode(&mut buf_slice).unwrap();
+        let buf_slice = buf.as_slice();
+        let r: Vec<Bsp> = bincode::deserialize(buf_slice).unwrap();
         data.extend(r);
     }
 }
@@ -485,7 +485,7 @@ pub fn reverse_by_twos(value: u64) -> u64 {
 
 
 /// A fixed-length Kmer sequence.
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize)]
 pub struct Kmer {
     pub storage: [u64; KMER_BLOCKS],
 }
@@ -678,7 +678,7 @@ impl fmt::Debug for Pmer {
 }
 
 /// A variable-length DNA sequence, up to 28bp
-#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, RustcEncodable, RustcDecodable)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize)]
 pub struct Pmer {
     storage: u64,
 }
@@ -859,7 +859,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use sim_tests::{random_dna, random_kmer, random_pmer, random_lmer, random_base};
-    use rand::{Rng, XorShiftRng};
+    use rand::{Rng, RngCore, SeedableRng};
+    use rand::rngs::SmallRng;
 
     fn check_kmer() {
         let km = random_kmer();
@@ -1038,7 +1039,7 @@ mod tests {
 
     #[test]
     fn test_bsp() {
-        let mut rng = XorShiftRng::new_unseeded();
+        let mut rng = SmallRng::seed_from_u64(0);
 
         for _ in 0..100 {
             check_bsp_sequence(&mut rng);
@@ -1046,7 +1047,7 @@ mod tests {
     }
 
     /// MSP a random string & verify that the BSPs match the original string
-    fn check_bsp_sequence(r: &mut XorShiftRng) {
+    fn check_bsp_sequence(r: &mut SmallRng) {
 
         let len = (r.next_u32() % 255) as usize;
         if len < K {
@@ -1103,7 +1104,7 @@ mod tests {
     #[test]
     fn check_consistent_shard() {
         let p = 5;
-        let mut rng = XorShiftRng::new_unseeded();
+        let mut rng = SmallRng::seed_from_u64(0);
         let len = 250;
 
         // make a random read and a bunch of edits of it
