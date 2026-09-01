@@ -16,8 +16,8 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::marker::PhantomData;
 
-use bincode::rustc_serialize::{encode_into, decode_from};
 use bincode;
+use serde::{Serialize, Deserialize};
 use byteorder::{BigEndian, WriteBytesExt, ReadBytesExt};
 
 use libc::{pread, pwrite, c_void, off_t, size_t, ssize_t};
@@ -51,7 +51,7 @@ pub trait Serializer<T>: Clone + Send {
 }
 
 
-#[derive(Clone, RustcEncodable, RustcDecodable, Debug, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct  ShardRecord {
     offset: usize,
     shard: usize,
@@ -291,7 +291,7 @@ impl<T> ShardWriteManager<T> where T: 'static + Sync + Send + Shardable {
         let regs = _regs.state.lock().unwrap();
         let mut buf = Vec::new();
 
-        encode_into(&regs.regions, &mut buf, bincode::SizeLimit::Infinite).unwrap();
+        bincode::serialize_into(&mut buf, &regs.regions).unwrap();
 
         let index_block_position = regs.cursor;
         let index_block_size = buf.len();
@@ -425,7 +425,7 @@ impl<T, S> ShardReader<T, S> where S: Serializer<T> {
         let index_block_position = file.read_u64::<BigEndian>().unwrap();
         let _ = file.read_u64::<BigEndian>().unwrap();
         file.seek(SeekFrom::Start(index_block_position as u64)).unwrap();
-        let regs = decode_from::<File, Vec<ShardRecord>>(file, bincode::SizeLimit::Infinite).unwrap();
+        let regs = bincode::deserialize_from::<_, Vec<ShardRecord>>(file).unwrap();
 
         (num_shards, regs)
     }
@@ -505,13 +505,13 @@ impl<T, S> ShardReaderSet<T, S> where S: Serializer<T> {
 
 #[cfg(test)]
 mod shard_tests {
-    use bincode::rustc_serialize::{encode_into, decode};
     use bincode;
     use tempfile;
+    use serde::{Serialize, Deserialize};
 
     use super::*;
 
-    #[derive(Copy, Clone, Eq, PartialEq, RustcEncodable, RustcDecodable, Debug)]
+    #[derive(Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Debug)]
     struct T1 {
         a: u64,
         b: u32,
@@ -530,12 +530,12 @@ mod shard_tests {
 
     impl Serializer<T1> for T1Ser {
         fn serialize(&self, items: &Vec<T1>, buf: &mut Vec<u8>) {
-            encode_into(items, buf, bincode::SizeLimit::Infinite).unwrap();
+            bincode::serialize_into(buf, items).unwrap();
         }
 
         fn deserialize(&self, buf: &mut Vec<u8>, data: &mut Vec<T1>) {
-            let mut buf_slice = buf.as_mut_slice();
-            let r: Vec<T1> = decode(&mut buf_slice).unwrap();
+            let buf_slice = buf.as_slice();
+            let r: Vec<T1> = bincode::deserialize(buf_slice).unwrap();
             data.extend(r);
         }
     }

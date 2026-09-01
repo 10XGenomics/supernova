@@ -20,14 +20,14 @@ use std::fs::File;
 use std::boxed::Box;
 
 use bincode;
-use bincode::rustc_serialize::{encode_into, decode_from};
+use serde::{Serialize, Deserialize};
+use serde_json;
 
 use utils::{load_barcode_whitelist2, load_barcode_whitelist_inverse};
 use shardio::shard::{ShardWriteManager, ShardSender, Shardable, Serializer, ShardReaderSet};
 
 use martian::{self, JsonDict, MartianStage};
-use rustc_serialize::json::{self, Json, ParserError};
-use rustc_serialize::Decodable;
+use serde_json::Value as Json;
 
 use libc;
 use lz4;
@@ -36,11 +36,10 @@ use flate2::Compression;
 
 use rayon::prelude::*;
 use rayon;
-use rayon::par_iter::reduce::{reduce, ReduceOp, SumOp};
 
-use rand::XorShiftRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 use fastq_10x::*;
 use fastq_10x::barcode::BarcodeValidator;
@@ -49,7 +48,7 @@ use fx;
 use utils;
 
 
-#[derive(RustcEncodable, RustcDecodable, PartialOrd, Ord, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, PartialOrd, Ord, Eq, PartialEq)]
 pub struct CrReadPair {
     gem_group: u8,
     corrected_bc: Option<u32>,
@@ -199,14 +198,14 @@ impl Serializer<CrReadPair> for CrReadPairSer {
     fn serialize(&self, items: &Vec<CrReadPair>, buf: &mut Vec<u8>) {
         let mut encoder = lz4::EncoderBuilder::new().build(buf).unwrap();
         //let mut encoder = zstd::stream::Encoder::new(buf, 1).unwrap();
-        encode_into(items, &mut encoder, bincode::SizeLimit::Infinite).unwrap();
+        bincode::serialize_into(&mut encoder, items).unwrap();
         encoder.finish();
     }
 
     fn deserialize(&self, buf: &mut Vec<u8>, data: &mut Vec<CrReadPair>) {
         //let mut decoder = zstd::stream::Decoder::new(buf.as_slice()).unwrap();
         let mut decoder = lz4::Decoder::new(buf.as_slice()).unwrap();
-        let r: Vec<CrReadPair> = decode_from(&mut decoder, bincode::SizeLimit::Infinite).unwrap();
+        let r: Vec<CrReadPair> = bincode::deserialize_from(&mut decoder).unwrap();
         data.extend(r);
     }
 }
@@ -316,20 +315,22 @@ fn get_internal() -> usize {
 fn init_threads(num_threads: usize) {
     if num_threads > 0 {
         println!("setup rayon with {} threads", num_threads);
-        let cfg = rayon::Configuration::new().set_num_threads(num_threads);
-        rayon::initialize(cfg).expect("Couldn't initialize rayon");
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
+            .expect("Couldn't initialize rayon");
     }
 }
 
 
 struct CountReduce { }
 
-impl<K> ReduceOp<HashMap<K,u32>> for CountReduce where K: Hash + Eq {
-    fn start_value(&self) -> HashMap<K,u32> {
+impl CountReduce {
+    fn start_value<K: Hash + Eq>(&self) -> HashMap<K,u32> {
         HashMap::new()
     }
 
-    fn reduce(&self, mut v1: HashMap<K, u32>, mut v2: HashMap<K, u32>) -> HashMap<K, u32> {
+    fn reduce<K: Hash + Eq>(&self, mut v1: HashMap<K, u32>, mut v2: HashMap<K, u32>) -> HashMap<K, u32> {
         for (k,v) in v2.drain() {
             let counter = v1.entry(k).or_insert(0);
             *counter += v;
@@ -376,7 +377,7 @@ pub fn main_bucket_bcs(
         counts
     });
 
-    let bc_counts = reduce(par_iter, &CountReduce{});
+    let bc_counts = par_iter.reduce(HashMap::new, |v1, v2| CountReduce{}.reduce(v1, v2));
     utils::write_obj(&bc_counts, bc_count_path).expect("error writing BC counts");
 }
 
@@ -407,16 +408,16 @@ pub fn main_sort_bcs(
 
         // Open FASTH writer
         let wa = File::create(&out_path).unwrap();
-        let wb = GzEncoder::new(wa, Compression::Fast);
+        let wb = GzEncoder::new(wa, Compression::fast());
         let mut w = BufWriter::new(wb);
 
         info!("Outputing file {}: {:?}", output_file_idx, out_path);
 
         // Seed based on the shard ID.  Still deterministic, but avoid correlations in sampling between shards
-        let mut rand = XorShiftRng::from_seed([0,0,1,output_file_idx as u32]);
+        let mut rand = SmallRng::seed_from_u64(output_file_idx as u64);
 
         let mut reads = Vec::new();
-        let mut emitted_reads = 0;
+        let mut emitted_reads: usize = 0;
 
         for shard in 0 .. reader.num_shards() {
             if shard % num_output_files == output_file_idx {
@@ -426,7 +427,7 @@ pub fn main_sort_bcs(
 
                 for r in reads.iter() {
                     // Final layer of read subsampling, to get within Poisson sample of requested number of reads
-                    if rand.next_f64() < read_subsample_rate {
+                    if rand.gen::<f64>() < read_subsample_rate {
                         r.write_to_fasth(&mut w, inv_whitelist);
                         emitted_reads += 1;
                     }
@@ -437,7 +438,7 @@ pub fn main_sort_bcs(
         emitted_reads
     });
 
-    let total_reads = reduce(par_iter, &SumOp);
+    let total_reads: usize = par_iter.sum();
     (my_output_files.into_iter().map(|(_,f)| f).collect(), total_reads)
 }
 
@@ -452,7 +453,7 @@ pub fn process_fastq<'a>(
     let mut counts = HashMap::new();
 
     // Always subsample deterministically
-    let mut rand = XorShiftRng::new_unseeded();
+    let mut rand = SmallRng::seed_from_u64(0);
     // below: 1.0-r "inverts" the sense of the fraction so that values near
     // 1.0 don't overflow.  Values near zero are a problem.
     let bc_subsample_thresh = chunk.bc_subsample_rate.map_or(0,
@@ -470,7 +471,7 @@ pub fn process_fastq<'a>(
         no_bc_count: 0,
     };
 
-    let iter: Box<Iterator<Item=RawReadSet>> =
+    let iter: Box<dyn Iterator<Item=RawReadSet>> =
         match chunk.read2 {
             Some(r2) => open_fastq_pair_iter(chunk.read1, r2, chunk.sample_index),
             None => open_interleaved_fastq_pair_iter(chunk.read1, chunk.sample_index),
@@ -479,7 +480,7 @@ pub fn process_fastq<'a>(
     for r in iter {
 
         // Read subsampling
-        if rand.next_f64() < read_subsample_rate {
+        if rand.gen::<f64>() < read_subsample_rate {
 
             let read_pair = fq_proc.process_read(r);
             match read_pair.corrected_bc {
@@ -572,11 +573,11 @@ pub fn process_unbarcoded<'a>(
         counts
     });
     
-    reduce(iter, &CountReduce{})
+    iter.reduce(HashMap::new, |v1, v2| CountReduce{}.reduce(v1, v2))
 }
 
 
-#[derive(RustcDecodable, RustcEncodable, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct FqInputChunk {
     /// Does the barcode read need to be RC'd
     barcode_reverse_complement: bool,
@@ -610,18 +611,17 @@ pub struct FqInputChunk {
 }
 
 
-fn read_json(path: &str) -> Result<Json, ParserError> {
+fn read_json(path: &str) -> Result<Json, Box<dyn std::error::Error>> {
     let mut f = try!(File::open(path));
     let mut buf = String::new();
     try!(f.read_to_string(&mut buf));
-    Json::from_str(&buf)
+    Ok(try!(serde_json::from_str(&buf)))
 }
 
 pub fn go(bc_whitelist: &Path, chunk_args: &str, output: &Path, bc_counts: &Path, num_threads: usize)  {
         let args = read_json(chunk_args).unwrap();
 
-        let mut decoder = json::Decoder::new(args["chunks"].clone());
-        let chunks: Vec<FqInputChunk> = Decodable::decode(&mut decoder).unwrap();
+        let chunks: Vec<FqInputChunk> = serde_json::from_value(args["chunks"].clone()).unwrap();
 
         for f in chunks.iter() {
             println!("proc: {}", f.read1);
@@ -636,27 +636,26 @@ pub struct BucketBcsMartian;
 impl MartianStage for BucketBcsMartian {
     fn split(&self, args: JsonDict) -> JsonDict {
 
-        let mut decoder = json::Decoder::new(args["chunks"].clone());
-        let chunks: Vec<FqInputChunk> = Decodable::decode(&mut decoder).unwrap();
+        let chunks: Vec<FqInputChunk> = serde_json::from_value(args["chunks"].clone()).unwrap();
 
         let mut stage_defs: Vec<Json> = Vec::new();
         for (idx, _) in chunks.iter().enumerate() {
 
-            let mut bt = BTreeMap::new();
-            bt.insert("__mem_gb".to_string(), Json::F64(8.0));
-            bt.insert("__threads".to_string(), Json::I64(3));
-            bt.insert("which".to_string(), Json::I64(idx as i64));
+            let mut bt = JsonDict::new();
+            bt.insert("__mem_gb".to_string(), Json::from(8.0));
+            bt.insert("__threads".to_string(), Json::from(3));
+            bt.insert("which".to_string(), Json::from(idx as i64));
             stage_defs.push(Json::Object(bt));
         }
 
-        let join_def: Json = Json::from_str( r#"
+        let join_def: Json = serde_json::from_str( r#"
                 {
                   "__mem_gb": 12.0,
                   "__threads": 4
                 }
         "# ).unwrap();
 
-        let mut cc = BTreeMap::new();
+        let mut cc = JsonDict::new();
         cc.insert("chunks".to_string(), Json::Array(stage_defs));
         cc.insert("join".to_string(), join_def );
         cc
@@ -664,8 +663,7 @@ impl MartianStage for BucketBcsMartian {
 
     fn main(&self, args: JsonDict, outs: JsonDict) -> JsonDict {
 
-        let mut decoder = json::Decoder::new(args["chunks"].clone());
-        let chunks: Vec<FqInputChunk> = Decodable::decode(&mut decoder).unwrap();
+        let chunks: Vec<FqInputChunk> = serde_json::from_value(args["chunks"].clone()).unwrap();
 
         let which_chunk = args["which"].as_i64().unwrap() as usize;
         let chunk = chunks[which_chunk].clone();
@@ -673,13 +671,13 @@ impl MartianStage for BucketBcsMartian {
         let nthreads = args["__threads"].as_i64().unwrap() as usize;
         let trim_length = args["trim_length"].as_i64().unwrap() as usize;
 
-        let _whitelist = args["barcode_whitelist_path"].as_string().unwrap();
+        let _whitelist = args["barcode_whitelist_path"].as_str().unwrap();
         let whitelist  = Path::new(_whitelist);
 
-        let read_fn = Path::new({outs.get("read_buckets").unwrap().as_string().unwrap().clone()});
-        let no_bc_read_fn = Path::new({outs.get("no_bc_read_buckets").unwrap().as_string().unwrap().clone()});
- 
-        let _bc_count_fn = {outs.get("bc_counts").unwrap().as_string().unwrap().clone()};
+        let read_fn = Path::new({outs.get("read_buckets").unwrap().as_str().unwrap().clone()});
+        let no_bc_read_fn = Path::new({outs.get("no_bc_read_buckets").unwrap().as_str().unwrap().clone()});
+
+        let _bc_count_fn = {outs.get("bc_counts").unwrap().as_str().unwrap().clone()};
         let bc_count_fn = Path::new(_bc_count_fn);
 
         main_bucket_bcs(&whitelist, vec![chunk], &read_fn, &no_bc_read_fn, &bc_count_fn, trim_length, nthreads);
@@ -692,17 +690,17 @@ impl MartianStage for BucketBcsMartian {
             let mut no_bc_read_buckets: Vec<String> = Vec::new();
 
             let cr = CountReduce{};
-            let mut bc_counts = cr.start_value();            
+            let mut bc_counts = cr.start_value();
 
             for c in chunk_outs {
                 // This is the output data -- pass to outs
                 read_buckets.push(c.get("read_buckets").unwrap().clone());
 
                 // These are the unbarcoded reads -- try to correct barcodes and writer to a new read bucket
-                no_bc_read_buckets.push(c["no_bc_read_buckets"].as_string().unwrap().to_string());
+                no_bc_read_buckets.push(c["no_bc_read_buckets"].as_str().unwrap().to_string());
 
                 // Load and aggregate the BC counts from this chunk
-                let chunk_counts: HashMap<(u8, u32), u32> = utils::read_obj(c["bc_counts"].as_string().unwrap()).unwrap();
+                let chunk_counts: HashMap<(u8, u32), u32> = utils::read_obj(c["bc_counts"].as_str().unwrap()).unwrap();
                 bc_counts = cr.reduce(bc_counts, chunk_counts);
             }
 
@@ -714,15 +712,14 @@ impl MartianStage for BucketBcsMartian {
             info!("First pass: {} barcoded reads, {} unbarcoded reads", bc_reads, no_bc_reads);
 
             // Output the corrected read bucket
-            let bc_corrected_read_bucket_fn = outs["read_buckets"].as_string().unwrap().to_string();
+            let bc_corrected_read_bucket_fn = outs["read_buckets"].as_str().unwrap().to_string();
             read_buckets.push(Json::String(bc_corrected_read_bucket_fn.clone()));
 
-            let bc_wl_path = args["barcode_whitelist_path"].as_string().unwrap();
+            let bc_wl_path = args["barcode_whitelist_path"].as_str().unwrap();
             let bc_wl = load_barcode_whitelist2(bc_wl_path);
 
             // Get the subsample rates from the first input chunk (they are assumed to be constant)
-            let mut decoder = json::Decoder::new(args["chunks"].clone());
-            let chunks: Vec<FqInputChunk> = Decodable::decode(&mut decoder).unwrap();
+            let chunks: Vec<FqInputChunk> = serde_json::from_value(args["chunks"].clone()).unwrap();
 
             let bc_subsample_rate = chunks[0].bc_subsample_rate;
 
@@ -753,7 +750,7 @@ impl MartianStage for BucketBcsMartian {
             for gg in 0_u8 .. 255_u8 { bc_counts.remove(&(gg,0)); }
             bc_counts = cr.reduce(bc_counts, bc_corrected_counts);            
 
-            utils::write_obj(&bc_counts, outs["bc_counts"].as_string().unwrap());
+            utils::write_obj(&bc_counts, outs["bc_counts"].as_str().unwrap());
 
 
             let mut total_reads = 0_i64;
@@ -767,11 +764,11 @@ impl MartianStage for BucketBcsMartian {
             info!("Total read pairs: {}, Requested read pairs: {:?}, Final subsample_rate: {:?}", total_reads, requested_read_pairs, final_subsample_rate);
 
             match final_subsample_rate {
-                Some(f) => outs.insert("final_subsample_rate".to_string(), Json::F64(f)),
+                Some(f) => outs.insert("final_subsample_rate".to_string(), Json::from(f)),
                 None => outs.insert("final_subsample_rate".to_string(), Json::Null)
             };
 
-            outs.insert("total_reads".to_string(), Json::I64(total_reads));
+            outs.insert("total_reads".to_string(), Json::from(total_reads));
             outs.insert("read_buckets".to_string(), Json::Array(read_buckets));
             outs.insert("no_bc_read_buckets".to_string(), Json::Array(vec![]));
             outs
@@ -782,14 +779,14 @@ impl MartianStage for BucketBcsMartian {
 pub struct SortBcsMartian;
 
 
-#[derive(RustcDecodable, RustcEncodable, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct SortArgs {
     read_buckets: Vec<String>,
     subsample_rate: Option<f64>,
     barcode_whitelist_path: String,
 }
 
-#[derive(RustcDecodable, RustcEncodable, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct SortSplit {
     __threads: usize,
     __mem_gb: f64,
@@ -797,7 +794,7 @@ struct SortSplit {
     total_chunks: usize,
 }
 
-#[derive(RustcDecodable, RustcEncodable, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct SortOuts {
     reads: Vec<String>,
     total_reads: f64,
@@ -815,10 +812,10 @@ impl MartianStage for SortBcsMartian {
         let nchunks = 16;
         for i in 0..nchunks {
             let mut chnk = JsonDict::new();
-            chnk.insert("__threads".to_string(), Json::I64(3));
-            chnk.insert("__mem_gb".to_string(), Json::F64(8.0));
-            chnk.insert("chunk_id".to_string(), Json::I64(i));
-            chnk.insert("total_chunks".to_string(), Json::I64(nchunks));
+            chnk.insert("__threads".to_string(), Json::from(3));
+            chnk.insert("__mem_gb".to_string(), Json::from(8.0));
+            chnk.insert("chunk_id".to_string(), Json::from(i));
+            chnk.insert("total_chunks".to_string(), Json::from(nchunks));
             stage_defs.push(Json::Object(chnk));
 
         }
@@ -838,7 +835,7 @@ impl MartianStage for SortBcsMartian {
         // Load id -> bc seq map
         let inverse_whitelist = load_barcode_whitelist_inverse(args.barcode_whitelist_path);
 
-        let out_path = outs["reads"].as_string().unwrap().clone();
+        let out_path = outs["reads"].as_str().unwrap().clone();
         let mut path = PathBuf::from(out_path);
         path.pop(); // This is where we will write to
 
@@ -855,7 +852,7 @@ impl MartianStage for SortBcsMartian {
 
     fn join(&self, _: JsonDict, outs: JsonDict, chunk_defs: Vec<JsonDict>, chunk_outs: Vec<JsonDict>) -> JsonDict {
 
-        let _path = outs["reads"].as_string().unwrap().clone();
+        let _path = outs["reads"].as_str().unwrap().clone();
         let mut out_path = PathBuf::from(_path);
         out_path.pop();
 

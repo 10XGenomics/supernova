@@ -16,8 +16,7 @@ use std::iter;
 use utils::MultiVec;
 use kmer::{Lmer, Exts, K};
 use martian::{JsonDict, MartianStage};
-use rustc_serialize::json::Json;
-use std::collections::BTreeMap;
+use serde_json::Value as Json;
 use std::fs;
 use std::string;
 
@@ -160,12 +159,12 @@ impl MartianStage for MainAsmMartian {
     }
 
     fn main(&self, args: JsonDict, outs: JsonDict) -> JsonDict {
-        let sedge_asm: Vec<PathBuf> = args["sedge_asm"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_string().unwrap())).collect();
-        let sedge_bcs: Vec<PathBuf> = args["sedge_bcs"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_string().unwrap())).collect();
+        let sedge_asm: Vec<PathBuf> = args["sedge_asm"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
+        let sedge_bcs: Vec<PathBuf> = args["sedge_bcs"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
 
-        let out_asm = Path::new({outs.get("asm_graph").unwrap().as_string().unwrap().clone()});
-        let out_bcs = Path::new({outs.get("asm_bcs").unwrap().as_string().unwrap().clone()});
-        let censor_file = PathBuf::from({outs.get("asm_graph").unwrap().as_string().unwrap().clone().to_string() + ".hair"});
+        let out_asm = Path::new({outs.get("asm_graph").unwrap().as_str().unwrap().clone()});
+        let out_bcs = Path::new({outs.get("asm_bcs").unwrap().as_str().unwrap().clone()});
+        let censor_file = PathBuf::from({outs.get("asm_graph").unwrap().as_str().unwrap().clone().to_string() + ".hair"});
 
         main_main_asm(sedge_asm.clone(), sedge_bcs.clone(), &out_asm, None, Some(&censor_file), None, false);
         main_main_asm(sedge_asm, sedge_bcs, &out_asm, Some(out_bcs), None,  Some(&censor_file), false);
@@ -182,31 +181,31 @@ pub struct MainAsmMartianSupernova;
 
 impl MartianStage for MainAsmMartianSupernova {
     fn split(&self, _: JsonDict) -> JsonDict {
-        let mut bt = BTreeMap::new();
-        bt.insert("__mem_gb".to_string(), Json::F64(64.0));
+        let mut bt = JsonDict::new();
+        bt.insert("__mem_gb".to_string(), Json::from(64.0));
         let obj = Json::Object(bt);
         let mut chunks = Vec::new();
         chunks.push(obj);
         let chunk_array = Json::Array(chunks);
-        let mut cc =  BTreeMap::new();
+        let mut cc =  JsonDict::new();
         cc.insert("chunks".to_string(), chunk_array);
         cc
     }
 
     fn main(&self, args: JsonDict, outs: JsonDict) -> JsonDict {
-        let sedge_asm: Vec<PathBuf> = args["sedge_asm"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_string().unwrap())).collect();
-        let sedge_bcs: Vec<PathBuf> = args["sedge_bcs"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_string().unwrap())).collect();
+        let sedge_asm: Vec<PathBuf> = args["sedge_asm"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
+        let sedge_bcs: Vec<PathBuf> = args["sedge_bcs"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
 
-        let out_asm = Path::new({outs.get("asm_graph").unwrap().as_string().unwrap().clone()});
+        let out_asm = Path::new({outs.get("asm_graph").unwrap().as_str().unwrap().clone()});
         main_main_asm(sedge_asm, sedge_bcs, &out_asm, None, None, None, true);
         outs.clone()
     }
 
     fn join(&self, _: JsonDict, outs: JsonDict, _: Vec<JsonDict>, chunk_outs: Vec<JsonDict>) -> JsonDict {
-        let chunk_name = chunk_outs[0].get("asm_graph").unwrap().as_string().unwrap();
-        let outs_name = outs.get("asm_graph").unwrap().as_string().unwrap();
+        let chunk_name = chunk_outs[0].get("asm_graph").unwrap().as_str().unwrap();
+        let outs_name = outs.get("asm_graph").unwrap().as_str().unwrap();
         fs::rename( chunk_name, outs_name ).unwrap();
-        let mut obj = BTreeMap::new();
+        let mut obj = JsonDict::new();
         obj.insert( "asm_graph".to_string(), Json::String( outs_name.to_string() ) );
         obj
     }

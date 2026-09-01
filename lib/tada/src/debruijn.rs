@@ -3,6 +3,7 @@
 //
 
 //! Utilities for building DeBruijn graphs efficiently
+use serde::{Serialize, Deserialize};
 use utils;
 use kmer::{self, K, Kmer, Dir, Exts, Bsp, Lmer};
 use std::collections::{VecDeque,};
@@ -789,7 +790,7 @@ pub fn fix_sedge_exts(sedge_db: &mut SedgeDb, valid_sedges: &BitSet)
     (0 .. sedge_db.sedges.len()).into_par_iter().map(|i| {
         let (seq, exts) = sedge_db.sedges[i];
         (i, get_true_exts(seq, exts, sedge_db, valid_sedges))
-    }).collect_into(&mut new_exts);
+    }).collect_into_vec(&mut new_exts);
 
     for &(idx, ne) in new_exts.iter() {
         sedge_db.sedges[idx].1 = ne;
@@ -828,7 +829,7 @@ pub fn get_true_exts(seq: Lmer, exts: Exts, sedge_db: &SedgeDb, valid_sedges: &B
 
 
 
-#[derive(Clone, RustcEncodable, RustcDecodable)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TempGraph {
     pub sequence: bitenc::BitEnc,
     pub start_pos: Vec<usize>,
@@ -947,7 +948,7 @@ impl TempGraph {
 
         (0..self.len()).into_par_iter().map(|i| {
             self.find_hairy_edge(max_len, i)
-        }).collect_into(&mut edges_to_trim);
+        }).collect_into_vec(&mut edges_to_trim);
 
         let he: Vec<usize> = edges_to_trim.into_iter().filter_map(|x| x).collect();
         he

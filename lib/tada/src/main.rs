@@ -10,11 +10,10 @@
 
 extern crate byteorder;
 extern crate bincode;
-extern crate rustc_serialize;
-extern crate bio;
 extern crate flate2;
 extern crate docopt;
 extern crate rand;
+extern crate rand_distr;
 extern crate chrono;
 extern crate time;
 extern crate itertools;
@@ -33,6 +32,8 @@ extern crate backtrace;
 extern crate lz4;
 extern crate smallvec;
 extern crate rustc_version_runtime;
+extern crate serde;
+extern crate serde_json;
 
 #[macro_use]
 extern crate log;
@@ -65,8 +66,10 @@ pub mod cmd_sort_fastq;
 use docopt::Docopt;
 use std::path::{Path, PathBuf};
 use std::env;
-use log::{LogRecord, LogLevelFilter};
-use env_logger::LogBuilder;
+use log::{Record, LevelFilter};
+use env_logger::Builder;
+use std::io::Write;
+use serde::Deserialize;
 use std::collections::HashMap;
 use chrono::*;
 use martian::MartianStage;
@@ -98,7 +101,7 @@ Options:
   --version            Show version.
 ";
 
-#[derive(Debug, RustcDecodable)]
+#[derive(Debug, Deserialize)]
 struct Args {
     arg_whitelist: String,
     arg_permutation: String,
@@ -149,7 +152,7 @@ fn get_version() -> String {
 fn main() {
 
     let args: Args = Docopt::new(USAGE)
-                         .and_then(|d| d.decode())
+                         .and_then(|d| d.deserialize())
                          .unwrap_or_else(|e| e.exit());
     println!("{:?}", args);
     info!("{:?}", args);
@@ -165,19 +168,19 @@ fn main() {
     if !args.cmd_martian {
 
         // setup logging
-        let format = |record: &LogRecord| {
+        let format = |buf: &mut env_logger::fmt::Formatter, record: &Record| {
             let time = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            format!("[{}] {} - {}", time, record.level(), record.args())
+            writeln!(buf, "[{}] {} - {}", time, record.level(), record.args())
         };
 
-        let mut builder = LogBuilder::new();
-        builder.format(format).filter(None, LogLevelFilter::Info);
+        let mut builder = Builder::new();
+        builder.format(format).filter(None, LevelFilter::Info);
 
         if env::var("RUST_LOG").is_ok() {
-           builder.parse(&env::var("RUST_LOG").unwrap());
+           builder.parse_filters(&env::var("RUST_LOG").unwrap());
         }
 
-        builder.init().unwrap();
+        builder.init();
     }
 
     // Log version info
@@ -206,7 +209,7 @@ fn main() {
 
     } else if args.cmd_martian {
 
-        let mut stage_registry: HashMap<String, Box<MartianStage>> = HashMap::new();
+        let mut stage_registry: HashMap<String, Box<dyn MartianStage>> = HashMap::new();
         stage_registry.insert("msp".to_string(), Box::new(cmd_msp::MspMartian));
         stage_registry.insert("shard-asm".to_string(), Box::new(cmd_shard_asm::ShardAsmMartian));
         stage_registry.insert("main-asm".to_string(), Box::new(cmd_main_asm::MainAsmMartian));

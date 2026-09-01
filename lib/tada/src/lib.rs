@@ -10,11 +10,12 @@
 
 extern crate byteorder;
 extern crate bincode;
-extern crate rustc_serialize;
-extern crate bio;
+extern crate serde;
+extern crate serde_json;
 extern crate flate2;
 extern crate docopt;
 extern crate rand;
+extern crate rand_distr;
 extern crate chrono;
 extern crate time;
 extern crate itertools;

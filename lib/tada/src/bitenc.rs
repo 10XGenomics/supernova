@@ -6,6 +6,7 @@
 //! A fixed-width bit encoding implementation. This allows to store a sequence of values over
 //! a reduced alphabet by packing them bit-encoded into a sequence of bytes.
 
+use serde::{Serialize, Deserialize};
 use std::fmt;
 use kmer;
 use std::hash::{Hash, Hasher};
@@ -19,7 +20,7 @@ fn mask() -> u64 {
 }
 
 /// A sequence of bitencoded values. This implementation is specialized to 2-bit alphabets
-#[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BitEnc {
     storage: Vec<u64>,
     mask: u64,

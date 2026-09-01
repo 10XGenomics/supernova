@@ -48,7 +48,7 @@ impl<'a> MultiFastqIter<'a> {
             None => panic!("Not a gz file"),
             Some(ext) => {
                 if ext == "gz" {
-                    let gz = GzDecoder::new(f).unwrap();
+                    let gz = GzDecoder::new(f);
                     let br = BufReader::new(gz);
                     let lines = br.lines();
                     MultiFastqIter {

@@ -4,13 +4,13 @@
 
 /// Implementation of the FM-Index and BWT for BitEnc objects with 2bit encodings.
 
+use serde::{Serialize, Deserialize};
 use std::iter::repeat;
 use kmer;
 use std::cmp::Ordering;
 use bitenc;
 
 use bincode;
-use bincode::rustc_serialize::{encode_into, decode_from};
 
 use std::fs::File;
 use std::io::{BufWriter, BufReader};
@@ -30,7 +30,7 @@ pub fn prescan<T: Copy, F: Fn(T, T) -> T>(a: &mut [T], neutral: T, op: F) {
 }
 
 /// An occurence array implementation.
-#[derive(RustcEncodable, RustcDecodable)]
+#[derive(Serialize, Deserialize)]
 pub struct Occ {
     occ: Vec<Vec<usize>>,
     k: usize,
@@ -77,7 +77,7 @@ pub fn less(bwt: &bitenc::BitEnc) -> Vec<usize> {
     less
 }
 
-#[derive(RustcEncodable, RustcDecodable)]
+#[derive(Serialize, Deserialize)]
 pub struct FMIndex {
     bwt: bitenc::BitEnc,
     sa: Vec<usize>,
@@ -217,7 +217,7 @@ fn sort_bucket(bucket: &mut Vec<usize>,
     }
 }
 
-#[derive(Debug, PartialEq, Eq, RustcEncodable, RustcDecodable)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BWT {
     pub bwt: bitenc::BitEnc,
     pub sa: Vec<usize>,
@@ -302,15 +302,15 @@ pub fn compute_bwt_bucket(bitenc: &bitenc::BitEnc, npos: usize, bucket_val: usiz
 pub fn write_bwt(bwt: &BWT, filename: &str) {
     let f = File::create(filename).unwrap();
     let writer = BufWriter::new(f);
-    let mut encoder = ZlibEncoder::new(writer, Compression::Best);
-    encode_into(&bwt, &mut encoder, bincode::SizeLimit::Infinite).unwrap();
+    let mut encoder = ZlibEncoder::new(writer, Compression::best());
+    bincode::serialize_into(&mut encoder, &bwt).unwrap();
 }
 
 pub fn read_bwt(filename: &str) -> BWT {
     let f = File::open(filename).unwrap();
     let reader = BufReader::new(f);
     let mut decoder = ZlibDecoder::new(reader);
-    let b: BWT = decode_from(&mut decoder, bincode::SizeLimit::Infinite).unwrap();
+    let b: BWT = bincode::deserialize_from(&mut decoder).unwrap();
     b
 }
 
@@ -323,7 +323,7 @@ pub fn merge_bwt_buckets(filenames: &Vec<String>, sa_step: usize) -> BWT {
         let f = File::open(filename).unwrap();
         let reader = BufReader::new(f);
         let mut decoder = ZlibDecoder::new(reader);
-        let b: BWT = decode_from(&mut decoder, bincode::SizeLimit::Infinite).unwrap();
+        let b: BWT = bincode::deserialize_from(&mut decoder).unwrap();
 
         for val in b.bwt.iter() {
             bwt.push(val);
@@ -440,7 +440,7 @@ mod tests {
 
             // Test for things that are not there.
             let pos = fm.backward_search(b"AAAAAAA".iter());
-            assert_eq!(pos, []);
+            assert!(pos.is_empty());
 
             // Test that the BWT properly loops over the end.
             let dna = "AATTAA";

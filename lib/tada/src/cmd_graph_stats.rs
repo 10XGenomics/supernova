@@ -2,6 +2,7 @@
 // Copyright (c) 2017 10X Genomics, Inc. All rights reserved.
 //
 
+use serde::{Serialize, Deserialize};
 use utils;
 use std::path::Path;
 use utils::MultiVec;
@@ -15,7 +16,7 @@ use debruijn::{self, VEdge, TempGraph};
 use csv;
 
 
-#[derive(RustcEncodable)]
+#[derive(Serialize)]
 struct GraphNode {
     id: usize,
     len: usize,
@@ -33,7 +34,7 @@ pub fn main_graph_stats(graph: &Path, bcs: &Path, stats: &Path)
 
     println!("bcs: start_pos: {:?}, items: {:?}, vec_len: {:?}", &bcs.start_pos[0..10], &bcs.items[0..40], &bcs.vec_len[0..10]);
 
-    let mut wtr = csv::Writer::from_file(stats).expect("open csv").delimiter(b'\t');
+    let mut wtr = csv::WriterBuilder::new().delimiter(b'\t').from_path(stats).expect("open csv");
 
     for e in graph.iter()
     {
@@ -46,12 +47,12 @@ pub fn main_graph_stats(graph: &Path, bcs: &Path, stats: &Path)
             sequence: e.sequence.to_string(),
         };
 
-        wtr.encode(record).expect("csv write error");
+        wtr.serialize(record).expect("csv write error");
     }
 }
 
 
-pub fn write_vedge_to_gfa(w: &mut Write, e: VEdge) {
+pub fn write_vedge_to_gfa(w: &mut dyn Write, e: VEdge) {
     writeln!(w, "S\t{}\t{}", e.id, e.sequence.to_dna_string()).unwrap();
 
     for (target, dir, _) in e.l_exts {

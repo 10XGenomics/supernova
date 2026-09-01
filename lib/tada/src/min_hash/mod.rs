@@ -178,7 +178,7 @@ pub fn jaccard<T: Hash + Eq + Clone + Copy, I1: Iterator<Item=T>, I2: Iterator<I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{self, Rng};
+    use rand::{self, Rng, RngCore};
     use csv;
 
    quickcheck! {
@@ -231,15 +231,18 @@ mod tests {
     #[test]
     pub fn test_min_hash() {
 
-        let mut wtr = csv::Writer::from_file("stats.csv").expect("open csv").delimiter(b'\t');
+        let mut wtr = csv::WriterBuilder::new()
+            .delimiter(b'\t')
+            .from_path("stats.csv")
+            .expect("open csv");
         let mut rng = rand::thread_rng();
 
         for _ in 0 .. 1000 {
-            let n1 = rng.gen_range(10, 100);
-            let n2 = rng.gen_range(10, 100);
-            let c = rng.gen_range(10, 300);
+            let n1 = rng.gen_range(10..100);
+            let n2 = rng.gen_range(10..100);
+            let c = rng.gen_range(10..300);
             let r = test_hashes(n1, n2, c, 500);
-            wtr.encode(r).expect("csv write error");
+            wtr.serialize(r).expect("csv write error");
         }
     }
 }

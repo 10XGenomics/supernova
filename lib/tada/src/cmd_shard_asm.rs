@@ -10,8 +10,8 @@
 //! This will be resolved later.
 
 use std::path::{Path, PathBuf};
-use rustc_serialize::json::Json;
-use std::collections::{HashMap, BTreeMap};
+use serde_json::Value as Json;
+use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, BuildHasher};
 use std::env;
@@ -42,8 +42,10 @@ pub fn main_shard_asm(min_kmer_obs: u32, chunk_id: usize, total_chunks: usize, s
 
     if num_threads > 0 {
         println!("setup rayon with {} threads", num_threads);
-        let cfg = rayon::Configuration::new().set_num_threads(num_threads);
-        rayon::initialize(cfg);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
+            .expect("Couldn't initialize rayon");
     }
 
     // process each shard, and collect results
@@ -70,7 +72,7 @@ pub fn main_shard_asm(min_kmer_obs: u32, chunk_id: usize, total_chunks: usize, s
         */
 
         (sedges, sedge_bcs)
-    }).collect_into(&mut results);
+    }).collect_into_vec(&mut results);
 
 
     let mut all_sedges = Vec::new();
@@ -104,16 +106,16 @@ impl MartianStage for ShardAsmMartian {
         let mut chunks = Vec::new();
         for chunk_id in 0..total_chunks
         {
-            let mut bt = BTreeMap::new();
-            bt.insert("chunk_id".to_string(), Json::I64(chunk_id));
-            bt.insert("total_chunks".to_string(), Json::I64(total_chunks));
-            bt.insert("__threads".to_string(), Json::I64(4));
-            bt.insert("__mem_gb".to_string(), Json::F64(36.0));
+            let mut bt = JsonDict::new();
+            bt.insert("chunk_id".to_string(), Json::from(chunk_id));
+            bt.insert("total_chunks".to_string(), Json::from(total_chunks));
+            bt.insert("__threads".to_string(), Json::from(4));
+            bt.insert("__mem_gb".to_string(), Json::from(36.0));
             chunks.push(Json::Object(bt));
         }
 
         let chunk_array = Json::Array(chunks);
-        let mut cc =  BTreeMap::new();
+        let mut cc =  JsonDict::new();
         cc.insert("chunks".to_string(), chunk_array);
         cc
     }
@@ -121,14 +123,14 @@ impl MartianStage for ShardAsmMartian {
     fn main(&self, args: JsonDict, outs: JsonDict) -> JsonDict {
 
         let min_kmer_obs = args["min_kmer_obs"].as_u64().unwrap() as u32;
-        let shard_chunks = args["chunks"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_string().unwrap())).collect();
+        let shard_chunks = args["chunks"].as_array().unwrap().iter().map(|v| PathBuf::from(v.as_str().unwrap())).collect();
 
         let chunk_id = args["chunk_id"].as_u64().unwrap() as usize;
         let total_chunks = args["total_chunks"].as_u64().unwrap() as usize;
         let threads = args["__threads"].as_u64().unwrap() as usize;
 
-        let sedge_asm = Path::new({outs.get("sedge_asm").unwrap().as_string().unwrap().clone()});
-        let sedge_bcs = Path::new({outs.get("sedge_bcs").unwrap().as_string().unwrap().clone()});
+        let sedge_asm = Path::new({outs.get("sedge_asm").unwrap().as_str().unwrap().clone()});
+        let sedge_bcs = Path::new({outs.get("sedge_bcs").unwrap().as_str().unwrap().clone()});
 
 
         main_shard_asm(min_kmer_obs, chunk_id, total_chunks, shard_chunks, sedge_asm, sedge_bcs, threads);
@@ -145,20 +147,20 @@ impl MartianStage for ShardAsmMartian {
             for (idx, c) in chunk_outs.into_iter().enumerate() {
 
                 //let _old_name =
-                let old_name = c.get("sedge_asm").unwrap().as_string().unwrap();
+                let old_name = c.get("sedge_asm").unwrap().as_str().unwrap();
                 let mut new_name = pwd.clone();
                 new_name.push(format!("chunk{}.sedge_asm", idx));
                 fs::rename(old_name, new_name.clone()).unwrap();
                 sedge_asms.push(Json::String(new_name.to_str().unwrap().to_string()));
 
-                let old_name = c.get("sedge_bcs").unwrap().as_string().unwrap();
+                let old_name = c.get("sedge_bcs").unwrap().as_str().unwrap();
                 let mut new_name = pwd.clone();
                 new_name.push(format!("chunk{}.sedge_bcs", idx));
                 fs::rename(old_name, new_name.clone()).unwrap();
                 sedge_bcss.push(Json::String(new_name.to_str().unwrap().to_string()));
             }
 
-            let mut obj = BTreeMap::new();
+            let mut obj = JsonDict::new();
             obj.insert("sedge_asm".to_string(), Json::Array(sedge_asms));
             obj.insert("sedge_bcs".to_string(), Json::Array(sedge_bcss));
             obj
